@@ -2,11 +2,12 @@
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse
 from pydantic import BaseModel
 from typing import Optional, List
 import asyncio
 import os
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
 from mdbpl.demos import list_demos, get_demo
@@ -214,6 +215,129 @@ async def get_demo_info(demo_name: str):
         return demo.get_metadata()
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.get("/api/demos/{demo_name}/docs")
+async def get_demo_docs(demo_name: str):
+    """
+    Get markdown documentation for a specific demo.
+    
+    Args:
+        demo_name: Name of the demo (e.g., 'index-performance')
+        
+    Returns:
+        Dictionary with markdown content and metadata.
+        
+    Note:
+        This is a convenience endpoint. For general doc access, use /api/docs/{path}
+    """
+    try:
+        demo = get_demo(demo_name)
+        metadata = demo.get_metadata()
+        return {
+            "markdown": demo.get_markdown_content(),
+            "has_docs": metadata.get("has_docs", False),
+            "title": metadata.get("title", ""),
+            "description": metadata.get("description", "")
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.get("/api/docs")
+async def list_documentation():
+    """
+    List all available documentation files in the docs/ directory.
+    
+    Returns:
+        Dictionary with categorized documentation files.
+    """
+    # Get project root (up from src/mdbpl/api.py)
+    project_root = Path(__file__).parent.parent.parent
+    docs_dir = project_root / "docs"
+    
+    if not docs_dir.exists():
+        return {"docs": [], "demos": []}
+    
+    # Find all markdown files
+    docs = []
+    demos = []
+    
+    try:
+        # Root level docs
+        for doc_path in docs_dir.glob("*.md"):
+            docs.append({
+                "name": doc_path.stem,
+                "filename": doc_path.name,
+                "path": doc_path.name
+            })
+        
+        # Demo docs
+        demos_dir = docs_dir / "demos"
+        if demos_dir.exists():
+            for doc_path in demos_dir.glob("*.md"):
+                demos.append({
+                    "name": doc_path.stem,
+                    "filename": doc_path.name,
+                    "path": f"demos/{doc_path.name}"
+                })
+        
+        return {
+            "docs": sorted(docs, key=lambda x: x["name"]),
+            "demos": sorted(demos, key=lambda x: x["name"])
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error listing docs: {str(e)}")
+
+
+@app.get("/api/docs/{path:path}")
+async def get_documentation(path: str):
+    """
+    Serve markdown documentation from the docs/ directory.
+    
+    Args:
+        path: Relative path to markdown file (e.g., 'demos/index-performance.md' or 'METRICS.md')
+        
+    Returns:
+        Dictionary with markdown content and metadata.
+        
+    Examples:
+        - GET /api/docs/demos/index-performance.md
+        - GET /api/docs/METRICS.md
+        - GET /api/docs/DSL-SPEC.md
+    """
+    # Get project root (up from src/mdbpl/api.py)
+    project_root = Path(__file__).parent.parent.parent
+    doc_path = project_root / "docs" / path
+    
+    # Security: Prevent directory traversal
+    try:
+        doc_path = doc_path.resolve()
+        docs_dir = (project_root / "docs").resolve()
+        if not str(doc_path).startswith(str(docs_dir)):
+            raise HTTPException(status_code=403, detail="Access forbidden")
+    except Exception:
+        raise HTTPException(status_code=403, detail="Invalid path")
+    
+    # Check if file exists
+    if not doc_path.exists() or not doc_path.is_file():
+        raise HTTPException(status_code=404, detail="Documentation not found")
+    
+    # Only serve markdown files
+    if not doc_path.suffix.lower() in [".md", ".markdown"]:
+        raise HTTPException(status_code=400, detail="Only markdown files are supported")
+    
+    # Read and return content
+    try:
+        content = doc_path.read_text(encoding='utf-8')
+        return {
+            "markdown": content,
+            "path": path,
+            "filename": doc_path.name,
+            "title": doc_path.stem.replace("-", " ").title()
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error reading file: {str(e)}")
 
 
 @app.post("/api/demos/{demo_name}/run")

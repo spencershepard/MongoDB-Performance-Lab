@@ -350,13 +350,62 @@ DSL → Compiler → MongoDB → Metrics → UI
 
 ---
 
-## Metrics
+## Performance Metrics
 
-- latency (p50/p95/p99)
-- docs scanned
-- index usage
-- throughput
-- query fingerprints
+MongoDB Performance Lab collects comprehensive metrics to help you understand query performance and identify optimization opportunities.
+
+### Core Metrics
+
+**Throughput & Latency**
+- **Operations per second** - Total query throughput
+- **Latency percentiles** (p50/p95/p99) - Response time distribution
+  - p50: 50% of operations complete faster than this
+  - p95: 95% of operations complete faster than this (key SLA metric)
+  - p99: 99% of operations complete faster than this (outlier detection)
+
+**Query Efficiency**
+- **Docs Examined** - Documents MongoDB scanned to answer queries
+- **Docs Returned** - Documents actually returned to the application
+- **Efficiency Score** - `(Docs Returned / Docs Examined) × 100%`
+  - 🟢 >80%: Excellent - index is very selective
+  - 🟡 50-80%: Good - index helps but could be improved
+  - 🔴 <50%: Poor - needs better indexing or query optimization
+
+**Index Usage**
+- **Index Scans** - Queries that used an index (efficient)
+- **Collection Scans** - Queries that scanned entire collection (inefficient for large datasets)
+- **Index Names** - Which specific indexes were used
+
+### Understanding Efficiency
+
+The efficiency score is the most important metric for optimization:
+
+```
+Without Index:
+  Docs Examined: 10,000 (full collection scan)
+  Docs Returned: 20
+  Efficiency: 0.2% 🔴
+
+With Index:
+  Docs Examined: 20
+  Docs Returned: 20
+  Efficiency: 100% 🟢
+```
+
+A low efficiency score means MongoDB is scanning far more data than needed - adding the right index can provide **10-100x** performance improvements.
+
+### Sampling Strategy
+
+To minimize benchmark overhead while maintaining accuracy:
+- **100% Sampling**: Latency, docs returned (every operation measured)
+- **10% Sampling**: Explain analysis (docs examined, index usage)
+- **Extrapolation**: Sampled explain metrics scaled to represent full workload
+
+This approach provides accurate metrics with minimal performance impact.
+
+### Detailed Metrics Guide
+
+For in-depth explanations of metrics collection, troubleshooting, and interpretation, see [Performance Metrics Guide](docs/METRICS.md).
 
 ---
 

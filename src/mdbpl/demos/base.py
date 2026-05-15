@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, asdict
 from typing import Optional, Any
 from datetime import datetime
+from pathlib import Path
 
 
 @dataclass
@@ -60,6 +61,7 @@ class Demo(ABC):
     name: str = ""
     title: str = ""
     description: str = ""
+    markdown_file: str = ""  # e.g., "index-performance.md"
     
     @abstractmethod
     def run(self) -> DemoResult:
@@ -72,4 +74,26 @@ class Demo(ABC):
             "name": self.name,
             "title": self.title,
             "description": self.description,
+            "has_docs": bool(self.markdown_file),
         }
+    
+    def get_markdown_content(self) -> str:
+        """Load markdown documentation if available.
+        
+        Looks for markdown files in docs/demos/ directory at project root.
+        The markdown_file attribute should just be the filename (e.g., 'index-performance.md').
+        """
+        if not self.markdown_file:
+            return self.description  # Fallback to simple description
+        
+        # Navigate to project root (up from src/mdbpl/demos/base.py)
+        project_root = Path(__file__).parent.parent.parent.parent
+        markdown_path = project_root / "docs" / "demos" / self.markdown_file
+        
+        try:
+            if markdown_path.exists():
+                return markdown_path.read_text(encoding='utf-8')
+        except Exception as e:
+            print(f"Warning: Failed to load markdown file {self.markdown_file}: {e}")
+        
+        return self.description  # Fallback

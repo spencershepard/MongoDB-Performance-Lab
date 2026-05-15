@@ -26,6 +26,7 @@ class OverindexingDemo(Demo):
     name = "overindexing"
     title = "Over-Indexing Performance Impact"
     description = "Shows how too many indexes degrade write performance"
+    markdown_file = "overindexing.md"
     
     def __init__(self):
         self.mongodb_uri = os.getenv("MONGODB_URI", "mongodb://localhost:27017")

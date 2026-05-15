@@ -10,6 +10,7 @@ REST API endpoints instead.
 """
 import asyncio
 import time
+import threading
 from datetime import datetime
 from typing import Optional
 
@@ -27,6 +28,88 @@ import os
 MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://mongodb:27017")
 storage = BenchmarkStorage("/data/benchmarks.db")
 
+# Global state for tracking demo execution progress
+_demo_execution_state = {
+    "running": False,
+    "current_step": None,
+    "completed_steps": [],
+    "result": None,
+    "error": None,
+    "_last_hash": None  # Track state changes to prevent unnecessary updates
+}
+
+
+def run_demo_with_progress(demo_name: str):
+    """Run a demo in a background thread and track progress in realtime."""
+    global _demo_execution_state
+    
+    try:
+        # Reset state
+        _demo_execution_state["running"] = True
+        _demo_execution_state["current_step"] = "Initializing demo..."
+        _demo_execution_state["completed_steps"] = []
+        _demo_execution_state["result"] = None
+        _demo_execution_state["error"] = None
+        _demo_execution_state["_last_hash"] = None  # Reset to force first update
+        
+        # Get demo instance
+        demo = get_demo(demo_name)
+        
+        # Wrap the demo's run method to track steps in realtime
+        original_run = demo.run
+        
+        def tracked_run():
+            # Import here to avoid circular imports
+            from ..demos.base import DemoResult, DemoStep
+            
+            # Patch DemoResult.steps list to track appends
+            result = original_run()
+            return result
+        
+        # Create a monitoring wrapper for DemoResult
+        from ..demos.base import DemoResult
+        original_init = DemoResult.__init__
+        
+        def tracked_init(self, *args, **kwargs):
+            original_init(self, *args, **kwargs)
+            # Wrap the steps list
+            original_steps = self.steps
+            
+            class TrackedStepsList(list):
+                def append(inner_self, step):
+                    # Update global state when a step is added
+                    _demo_execution_state["current_step"] = step.description
+                    super().append(step)
+                    if step.completed_at:
+                        _demo_execution_state["completed_steps"].append({
+                            "name": step.name,
+                            "description": step.description,
+                            "completed": True
+                        })
+            
+            self.steps = TrackedStepsList(original_steps)
+        
+        # Temporarily patch DemoResult
+        DemoResult.__init__ = tracked_init
+        
+        try:
+            # Execute demo
+            result = tracked_run()
+            
+            # Store result
+            _demo_execution_state["running"] = False
+            _demo_execution_state["current_step"] = None
+            _demo_execution_state["result"] = result.to_dict()
+        finally:
+            # Restore original DemoResult
+            DemoResult.__init__ = original_init
+        
+    except Exception as e:
+        _demo_execution_state["running"] = False
+        _demo_execution_state["current_step"] = None
+        _demo_execution_state["error"] = str(e)
+        _demo_execution_state["result"] = None
+
 
 def create_dash_app(requests_pathname_prefix: str = "/") -> Dash:
     """Create and configure the Dash application.
@@ -40,7 +123,8 @@ def create_dash_app(requests_pathname_prefix: str = "/") -> Dash:
     app = Dash(
         __name__,
         requests_pathname_prefix=requests_pathname_prefix,
-        suppress_callback_exceptions=True
+        suppress_callback_exceptions=True,
+        title="MongoDB Performance Lab"
     )
     
     # Inject custom CSS into the app
@@ -159,6 +243,7 @@ def create_dash_app(requests_pathname_prefix: str = "/") -> Dash:
                 .status-running {
                     color: #f59e0b;
                     font-size: 16px;
+                    font-weight: 600;
                 }
                 
                 .status-detail {
@@ -169,11 +254,58 @@ def create_dash_app(requests_pathname_prefix: str = "/") -> Dash:
                 .status-success {
                     color: #22c55e;
                     font-size: 16px;
+                    font-weight: 600;
                 }
                 
                 .status-error {
                     color: #ef4444;
                     font-size: 16px;
+                    font-weight: 600;
+                }
+                
+                .step-progress {
+                    background: #f8fafc;
+                    padding: 16px;
+                    border-radius: 8px;
+                    border: 1px solid #e2e8f0;
+                    margin-top: 12px;
+                }
+                
+                .step-item {
+                    display: flex;
+                    align-items: center;
+                    margin-bottom: 8px;
+                    padding: 8px;
+                    border-radius: 6px;
+                    transition: all 0.2s ease;
+                }
+                
+                .step-item-running {
+                    background: #fef3c7;
+                    animation: pulse 1.5s ease-in-out infinite;
+                }
+                
+                @keyframes pulse {
+                    0%, 100% { opacity: 1; }
+                    50% { opacity: 0.7; }
+                }
+                
+                .step-icon {
+                    margin-right: 8px;
+                    font-size: 16px;
+                }
+                
+                .step-text {
+                    font-size: 14px;
+                }
+                
+                .step-text-completed {
+                    color: #64748b;
+                }
+                
+                .step-text-running {
+                    color: #0f172a;
+                    font-weight: 500;
                 }
                 
                 .loading-container {
@@ -497,6 +629,163 @@ def create_dash_app(requests_pathname_prefix: str = "/") -> Dash:
                     border-color: #3b82f6;
                     background: #eff6ff;
                 }
+                
+                /* Markdown content styling */
+                .demo-markdown {
+                    line-height: 1.7;
+                    color: #334155;
+                    max-width: 900px;
+                }
+                
+                .demo-markdown h1 {
+                    font-size: 28px;
+                    font-weight: 700;
+                    margin-top: 24px;
+                    margin-bottom: 16px;
+                    color: #0f172a;
+                    border-bottom: 2px solid #e2e8f0;
+                    padding-bottom: 8px;
+                }
+                
+                .demo-markdown h2 {
+                    font-size: 22px;
+                    font-weight: 600;
+                    margin-top: 20px;
+                    margin-bottom: 12px;
+                    color: #1e293b;
+                }
+                
+                .demo-markdown h3 {
+                    font-size: 18px;
+                    font-weight: 600;
+                    margin-top: 16px;
+                    margin-bottom: 8px;
+                    color: #334155;
+                }
+                
+                .demo-markdown p {
+                    margin-bottom: 12px;
+                }
+                
+                .demo-markdown strong {
+                    font-weight: 600;
+                    color: #0f172a;
+                }
+                
+                .demo-markdown code {
+                    background: #f1f5f9;
+                    padding: 2px 6px;
+                    border-radius: 4px;
+                    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+                    font-size: 13px;
+                    color: #e11d48;
+                }
+                
+                .demo-markdown pre {
+                    background: #1e293b;
+                    padding: 16px;
+                    border-radius: 8px;
+                    overflow-x: auto;
+                    margin: 16px 0;
+                    border: 1px solid #334155;
+                }
+                
+                .demo-markdown pre code {
+                    background: none;
+                    color: #94a3b8;
+                    padding: 0;
+                    font-size: 14px;
+                }
+                
+                .demo-markdown ul, .demo-markdown ol {
+                    margin-left: 24px;
+                    margin-bottom: 16px;
+                }
+                
+                .demo-markdown li {
+                    margin-bottom: 8px;
+                }
+                
+                .demo-markdown blockquote {
+                    border-left: 4px solid #3b82f6;
+                    padding-left: 16px;
+                    margin: 16px 0;
+                    color: #64748b;
+                    font-style: italic;
+                }
+                
+                .demo-markdown table {
+                    border-collapse: collapse;
+                    width: 100%;
+                    margin: 16px 0;
+                    font-size: 14px;
+                }
+                
+                .demo-markdown th, .demo-markdown td {
+                    border: 1px solid #e2e8f0;
+                    padding: 10px 12px;
+                    text-align: left;
+                }
+                
+                .demo-markdown th {
+                    background: #f8fafc;
+                    font-weight: 600;
+                    color: #0f172a;
+                }
+                
+                .demo-markdown tr:nth-child(even) {
+                    background: #f8fafc;
+                }
+                
+                .demo-markdown hr {
+                    border: none;
+                    border-top: 2px solid #e2e8f0;
+                    margin: 24px 0;
+                }
+                
+                .demo-markdown a {
+                    color: #3b82f6;
+                    text-decoration: none;
+                }
+                
+                .demo-markdown a:hover {
+                    text-decoration: underline;
+                }
+                
+                .footer {
+                    margin-top: 40px;
+                    padding: 24px 30px;
+                    background: #f8fafc;
+                    border-top: 1px solid #e2e8f0;
+                    border-radius: 0 0 12px 12px;
+                    text-align: center;
+                }
+                
+                .footer-links {
+                    display: flex;
+                    justify-content: center;
+                    gap: 32px;
+                    flex-wrap: wrap;
+                }
+                
+                .footer-link {
+                    color: #64748b;
+                    text-decoration: none;
+                    font-size: 14px;
+                    font-weight: 500;
+                    transition: color 0.2s ease;
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                }
+                
+                .footer-link:hover {
+                    color: #3b82f6;
+                }
+                
+                .footer-icon {
+                    font-size: 18px;
+                }
             </style>
         </head>
         <body>
@@ -532,6 +821,20 @@ def create_dash_app(requests_pathname_prefix: str = "/") -> Dash:
         # Stores for tracking state
         dcc.Store(id="execution-state", data={"running": False, "result": None}),
         dcc.Store(id="benchmark-state", data={"running": False, "result": None}),
+        
+        # Footer
+        html.Div([
+            html.Div([
+                html.A([
+                    html.Span("📚", className="footer-icon"),
+                    html.Span("MongoDB Documentation")
+                ], href="https://www.mongodb.com/docs/", target="_blank", className="footer-link"),
+                html.A([
+                    html.Span("💻", className="footer-icon"),
+                    html.Span("GitHub: @spencershepard")
+                ], href="https://github.com/spencershepard/MongoDB-Performance-Lab", target="_blank", className="footer-link"),
+            ], className="footer-links")
+        ], className="footer"),
         
     ], className="app-container")
     
@@ -576,7 +879,7 @@ def render_demos_tab():
         
         dcc.Interval(
             id="interval-component",
-            interval=1000,
+            interval=500,  # Poll every 500ms for progress updates
             n_intervals=0,
             disabled=True
         ),
@@ -723,60 +1026,141 @@ def setup_callbacks(app: Dash):
         
         try:
             demo = get_demo(demo_name)
-            metadata = demo.get_metadata()
+            markdown_content = demo.get_markdown_content()
+            
+            # Use dcc.Markdown to render the content with syntax highlighting
             return html.Div([
-                html.P(metadata["description"], className="demo-desc"),
-            ]), False
+                dcc.Markdown(
+                    markdown_content,
+                    className="demo-markdown",
+                    highlight_config={
+                        "theme": "dark"
+                    }
+                )
+            ], style={"marginTop": "20px"}), False
         except Exception as e:
             return html.P(f"Error: {e}", className="error"), True
     
     @app.callback(
         [Output("execution-state", "data"),
-         Output("status-message", "children"),
          Output("run-button", "disabled", allow_duplicate=True),
-         Output("interval-component", "disabled")],
+         Output("interval-component", "disabled", allow_duplicate=True)],
         Input("run-button", "n_clicks"),
         [State("demo-selector", "value"),
          State("execution-state", "data")],
         prevent_initial_call=True
     )
-    def run_demo(n_clicks, demo_name, state):
-        """Execute the selected demo by calling it directly."""
+    def start_demo(n_clicks, demo_name, state):
+        """Start the demo execution in a background thread."""
         if n_clicks == 0 or not demo_name:
-            return no_update, no_update, no_update, no_update
+            return no_update, no_update, no_update
         
         # If already running, ignore
-        if state.get("running"):
+        if _demo_execution_state["running"]:
+            return no_update, no_update, no_update
+        
+        # Start demo in background thread
+        thread = threading.Thread(target=run_demo_with_progress, args=(demo_name,), daemon=True)
+        thread.start()
+        
+        # Enable interval polling and disable button
+        return {"running": True}, True, False
+    
+    @app.callback(
+        [Output("status-message", "children"),
+         Output("execution-state", "data", allow_duplicate=True),
+         Output("run-button", "disabled", allow_duplicate=True),
+         Output("interval-component", "disabled", allow_duplicate=True)],
+        Input("interval-component", "n_intervals"),
+        State("execution-state", "data"),
+        prevent_initial_call=True
+    )
+    def update_progress(n_intervals, state):
+        """Poll for demo progress and update UI."""
+        global _demo_execution_state
+        
+        # Create hash of current state to detect changes
+        import hashlib
+        import json
+        
+        state_data = {
+            "running": _demo_execution_state["running"],
+            "current_step": _demo_execution_state["current_step"],
+            "completed_steps": len(_demo_execution_state["completed_steps"]),
+            "has_result": _demo_execution_state["result"] is not None,
+            "has_error": _demo_execution_state["error"] is not None
+        }
+        current_hash = hashlib.md5(json.dumps(state_data, sort_keys=True).encode()).hexdigest()
+        
+        # If state hasn't changed, don't update anything
+        if current_hash == _demo_execution_state["_last_hash"]:
             return no_update, no_update, no_update, no_update
         
-        try:
-            # Get demo instance
-            demo = get_demo(demo_name)
+        # Update the hash
+        _demo_execution_state["_last_hash"] = current_hash
+        
+        # Check if demo is still running
+        if not _demo_execution_state["running"]:
+            # Demo completed - check for result or error
+            if _demo_execution_state["error"]:
+                status = html.Span(
+                    f"❌ Demo failed: {_demo_execution_state['error']}",
+                    className="status-error"
+                )
+                return status, {"running": False, "result": None}, False, True
             
-            # Update status to running
+            elif _demo_execution_state["result"]:
+                result = _demo_execution_state["result"]
+                if result.get("success"):
+                    status = html.Span("✅ Demo completed successfully!", className="status-success")
+                else:
+                    status = html.Span(
+                        f"❌ Demo failed: {result.get('error', 'Unknown error')}",
+                        className="status-error"
+                    )
+                return status, {"running": False, "result": result}, False, True
+            
+            # Demo finished but no result yet (shouldn't happen)
+            return no_update, no_update, no_update, no_update
+        
+        # Demo is running - show progress
+        current_step = _demo_execution_state["current_step"]
+        completed_steps = _demo_execution_state["completed_steps"]
+        
+        # Build progress display with nice styling
+        if completed_steps or current_step:
+            step_list = []
+            
+            # Show completed steps
+            for step in completed_steps:
+                step_list.append(
+                    html.Div([
+                        html.Span("✅", className="step-icon"),
+                        html.Span(step["description"], className="step-text step-text-completed")
+                    ], className="step-item")
+                )
+            
+            # Show current step with animation
+            if current_step:
+                step_list.append(
+                    html.Div([
+                        html.Span("⏳", className="step-icon"),
+                        html.Span(current_step, className="step-text step-text-running")
+                    ], className="step-item step-item-running")
+                )
+            
             status = html.Div([
-                html.Span("⏳ Running demo... ", className="status-running"),
+                html.Div("Demo in progress", className="status-running", style={"marginBottom": "12px"}),
+                html.Div(step_list, className="step-progress")
+            ])
+        else:
+            status = html.Div([
+                html.Span("⏳ Starting demo... ", className="status-running"),
                 html.Span("This may take 1-2 minutes.", className="status-detail")
             ])
-            
-            # Execute demo (this blocks, but Dash handles it)
-            result = demo.run()
-            result_dict = result.to_dict()
-            
-            # Update state with result
-            new_state = {"running": False, "result": result_dict}
-            
-            if result_dict.get("success"):
-                status = html.Span("✅ Demo completed successfully!", className="status-success")
-            else:
-                status = html.Span(f"❌ Demo failed: {result_dict.get('error', 'Unknown error')}", className="status-error")
-            
-            return new_state, status, False, True
-            
-        except Exception as e:
-            new_state = {"running": False, "result": None}
-            status = html.Span(f"❌ Error: {str(e)}", className="status-error")
-            return new_state, status, False, True
+        
+        # Only update button and interval states when transitioning
+        return status, no_update, no_update, no_update
     
     @app.callback(
         Output("results-container", "children"),

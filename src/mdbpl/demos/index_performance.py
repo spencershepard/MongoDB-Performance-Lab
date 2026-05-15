@@ -22,6 +22,7 @@ class IndexPerformanceDemo(Demo):
     name = "index-performance"
     title = "Index Performance Impact"
     description = "Demonstrates dramatic read performance improvement with proper indexing"
+    markdown_file = "index-performance.md"
     
     def __init__(self):
         self.mongodb_uri = os.getenv("MONGODB_URI", "mongodb://localhost:27017")

@@ -99,10 +99,6 @@ class BenchmarkResult:
             # Calculate sampling ratio (actual vs sampled)
             sampling_ratio = self.successful_operations / self.operations_with_explain
             
-            # Store original values for logging
-            original_examined = self.total_docs_examined
-            original_returned = self.total_docs_returned
-            
             # Extrapolate docs examined and returned
             self.total_docs_examined = int(self.total_docs_examined * sampling_ratio)
             self.total_docs_returned = int(self.total_docs_returned * sampling_ratio)
@@ -110,12 +106,6 @@ class BenchmarkResult:
             # Extrapolate scan counts
             self.index_scans = int(self.index_scans * sampling_ratio)
             self.collection_scans = int(self.collection_scans * sampling_ratio)
-            
-            # Log extrapolation
-            print(f"DEBUG Extrapolation: sampled={self.operations_with_explain}, "
-                  f"total={self.successful_operations}, ratio={sampling_ratio:.1f}x")
-            print(f"  Docs examined: {original_examined} → {self.total_docs_examined}")
-            print(f"  Docs returned: {original_returned} → {self.total_docs_returned}")
 
 
 class Distribution:
@@ -367,10 +357,6 @@ class WorkloadExecutor:
                     # This ensures both metrics are consistently sampled
                     result_count = len(results)
                     
-                    # Debug: log read operation results
-                    if operation.name == "read" and result_count == 0:
-                        print(f"DEBUG: Read query returned 0 results. Filter: {query_filter}")
-                    
                     docs_returned = None
                     docs_examined = None
                     index_used = None
@@ -427,13 +413,8 @@ class WorkloadExecutor:
                                     return None
                                 
                                 index_used = find_index_scan(stats.get('executionStages', {}))
-                                
-                                # Debug: log explain results
-                                print(f"DEBUG: Explain for {operation.name}: examined={docs_examined}, "
-                                      f"returned={docs_returned}, index={index_used}")
-                        except Exception as e:
+                        except Exception:
                             # Explain failed, continue with None values
-                            print(f"DEBUG: Explain failed for {operation.name}: {e}")
                             pass
                     
                     success = True
