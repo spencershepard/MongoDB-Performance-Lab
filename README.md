@@ -1,3 +1,6 @@
+
+![MongoDB Performance Lab](logo.gif)
+
 # MongoDB Performance Lab
 
 An interactive MongoDB performance experimentation platform designed for learning, optimization, and CI/CD integration.
@@ -540,3 +543,14 @@ This enables:
 - reproducibility
 - extensibility
 - safe automation
+
+---
+
+## License
+
+This project is released into the **public domain** under the [Unlicense](https://unlicense.org).
+
+You are free to use, modify, distribute, and do anything with this software without any restrictions. See the [LICENSE](LICENSE) file for details.
+
+**Created by:** [Spencer Shepard](https://github.com/spencershepard)
+
