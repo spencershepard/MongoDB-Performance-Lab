@@ -1,0 +1,43 @@
+name: "balanced"
+description: "YCSB Workload A - Balanced read/write (50% read, 50% update)"
+database: "perflab"
+collection: "usertable"
+
+distribution:
+  type: "zipfian"
+
+operations:
+  - name: "read"
+    weight: 50
+    operation: "find"
+    filter:
+      field: "_id"
+      operator: "eq"
+      value:
+        type: "param"
+        param: "userId"
+    limit: 1
+
+  - name: "update"
+    weight: 50
+    operation: "update"
+    filter:
+      field: "_id"
+      operator: "eq"
+      value:
+        type: "param"
+        param: "userId"
+    update:
+      $set:
+        field0:
+          type: "random"
+          length: 100
+        field1:
+          type: "random"
+          length: 100
+        field2:
+          type: "random"
+          length: 100
+        field3:
+          type: "random"
+          length: 100

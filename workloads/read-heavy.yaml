@@ -1,0 +1,45 @@
+name: "read-heavy"
+description: "YCSB Workload B - Read heavy (95% read, 5% update)"
+database: "perflab"
+collection: "usertable"
+
+distribution:
+  type: "zipfian"
+
+operations:
+  - name: "read"
+    weight: 95
+    operation: "find"
+    filter:
+      field: "_id"
+      operator: "eq"
+      value:
+        type: "param"
+        param: "userId"
+    projection:
+      field0: 1
+      field1: 1
+      field2: 1
+      field3: 1
+      field4: 1
+      field5: 1
+      field6: 1
+      field7: 1
+      field8: 1
+      field9: 1
+    limit: 1
+
+  - name: "update"
+    weight: 5
+    operation: "update"
+    filter:
+      field: "_id"
+      operator: "eq"
+      value:
+        type: "param"
+        param: "userId"
+    update:
+      $set:
+        field0:
+          type: "random"
+          length: 100

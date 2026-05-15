@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mdbpl"
+version = "0.1.0"
+description = "MongoDB Performance Lab - YCSB-inspired benchmarking platform"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.27.1",
+    "pymongo>=4.6.1",
+    "click>=8.1.7",
+    "pydantic>=2.6.1",
+    "pyyaml>=6.0.1",
+    "dash>=2.14.0",
+    "plotly>=5.18.0",
+    "pandas>=2.1.0",
+]
+
+[project.scripts]
+mdbpl = "mdbpl.cli:cli"
+
+[tool.setuptools.packages.find]
+where = ["src"]

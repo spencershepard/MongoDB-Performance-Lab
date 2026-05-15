@@ -1,0 +1,94 @@
+name: "ecommerce-snapshot"
+description: "Example production-replica workload for e-commerce orders"
+database: "ecommerce"
+collection: "orders"
+
+distribution:
+  type: "zipfian"  # Most queries hit recent/popular orders
+
+operations:
+  # Common: Find user's orders
+  - name: "get-user-orders"
+    weight: 40
+    operation: "find"
+    filter:
+      field: "userId"
+      operator: "eq"
+      value:
+        type: "param"
+        param: "userId"
+    projection:
+      orderId: 1
+      total: 1
+      status: 1
+      createdAt: 1
+    sort:
+      createdAt: -1
+    limit: 10
+
+  # Common: Get order details (with embedded items array)
+  - name: "get-order-detail"
+    weight: 30
+    operation: "find"
+    filter:
+      field: "_id"
+      operator: "eq"
+      value:
+        type: "param"
+        param: "orderId"
+    limit: 1
+
+  # Search orders by status and date range
+  - name: "recent-pending-orders"
+    weight: 15
+    operation: "find"
+    filter:
+      and:
+        - field: "status"
+          operator: "eq"
+          value:
+            type: "literal"
+            value: "pending"
+        - field: "createdAt"
+          operator: "gte"
+          value:
+            type: "param"
+            param: "startDate"
+    sort:
+      createdAt: -1
+    limit: 20
+
+  # Array query: Find orders containing specific product
+  - name: "orders-with-product"
+    weight: 10
+    operation: "find"
+    filter:
+      field: "items.productId"
+      operator: "eq"
+      value:
+        type: "param"
+        param: "productId"
+    projection:
+      orderId: 1
+      userId: 1
+      items: 1
+    limit: 50
+
+  # Update order status
+  - name: "update-order-status"
+    weight: 5
+    operation: "update"
+    filter:
+      field: "_id"
+      operator: "eq"
+      value:
+        type: "param"
+        param: "orderId"
+    update:
+      $set:
+        status:
+          type: "literal"
+          value: "shipped"
+        updatedAt:
+          type: "literal"
+          value: "2024-01-01T00:00:00Z"  # Would be dynamic in real implementation

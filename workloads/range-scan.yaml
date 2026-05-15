@@ -1,0 +1,32 @@
+name: "range-scan"
+description: "Range query workload - Tests index efficiency for range scans"
+database: "perflab"
+collection: "usertable"
+
+distribution:
+  type: "uniform"
+
+operations:
+  - name: "range-scan"
+    weight: 80
+    operation: "find"
+    filter:
+      field: "score"
+      operator: "gte"
+      value:
+        type: "param"
+        param: "rangeStart"
+    sort:
+      score: 1
+    limit: 20
+
+  - name: "point-read"
+    weight: 20
+    operation: "find"
+    filter:
+      field: "_id"
+      operator: "eq"
+      value:
+        type: "param"
+        param: "userId"
+    limit: 1
