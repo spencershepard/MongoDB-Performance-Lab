@@ -1,11 +1,9 @@
 
-![MongoDB Performance Lab](logo.gif)
-
 # MongoDB Performance Lab
 
 An interactive MongoDB performance experimentation platform designed for learning, optimization, and CI/CD integration.
 
----
+![MongoDB Performance Lab](logo.png)
 
 ## Overview
 
