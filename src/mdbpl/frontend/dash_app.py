@@ -9,14 +9,16 @@ in the same Python process. External frontends (React, etc.) should use the
 REST API endpoints instead.
 """
 import asyncio
+import json
 import time
 import threading
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 import pandas as pd
 import plotly.graph_objects as go
-from dash import Dash, html, dcc, callback, Input, Output, State, no_update, ALL
+from dash import Dash, html, dcc, callback, Input, Output, State, no_update, ALL, callback_context
 
 from ..demos import list_demos, get_demo
 from ..dsl.loader import WorkloadLoader
@@ -120,11 +122,17 @@ def create_dash_app(requests_pathname_prefix: str = "/") -> Dash:
     Returns:
         Configured Dash app instance
     """
+    # Get the directory where this file is located
+    import os
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    assets_folder = os.path.join(current_dir, "assets")
+    
     app = Dash(
         __name__,
         requests_pathname_prefix=requests_pathname_prefix,
         suppress_callback_exceptions=True,
-        title="MongoDB Performance Lab"
+        title="MongoDB Performance Lab",
+        assets_folder=assets_folder
     )
     
     # Inject custom CSS into the app
@@ -156,23 +164,20 @@ def create_dash_app(requests_pathname_prefix: str = "/") -> Dash:
                 }
                 
                 .header {
-                    background: white;
-                    padding: 30px;
+                    background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+                    padding: 20px 30px;
                     border-radius: 12px;
-                    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+                    box-shadow: 0 2px 4px rgba(0,0,0,0.08);
                     margin-bottom: 30px;
+                    display: flex;
+                    justify-content: flex-start;
+                    align-items: center;
+                    border: 1px solid #e2e8f0;
                 }
                 
-                .title {
-                    font-size: 32px;
-                    font-weight: 700;
-                    margin-bottom: 8px;
-                    color: #0f172a;
-                }
-                
-                .subtitle {
-                    font-size: 16px;
-                    color: #64748b;
+                .header-logo {
+                    height: 80px;
+                    width: auto;
                 }
                 
                 .main-content {
@@ -566,6 +571,28 @@ def create_dash_app(requests_pathname_prefix: str = "/") -> Dash:
                     gap: 12px;
                 }
                 
+                .demo-list {
+                    margin-bottom: 30px;
+                }
+                
+                .demo-card {
+                    display: flex;
+                    align-items: center;
+                    gap: 20px;
+                    padding: 20px;
+                    background: #f8fafc;
+                    border-radius: 8px;
+                    border: 1px solid #e2e8f0;
+                    margin-bottom: 12px;
+                    transition: all 0.2s;
+                }
+                
+                .demo-card:hover {
+                    border-color: #3b82f6;
+                    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+                    transform: translateY(-2px);
+                }
+                
                 .result-card {
                     background: #f8fafc;
                     padding: 16px;
@@ -801,16 +828,13 @@ def create_dash_app(requests_pathname_prefix: str = "/") -> Dash:
     
     app.layout = html.Div([
         html.Div([
-            html.H1("🚀 MongoDB Performance Lab", className="title"),
-            html.P(
-                "Interactive performance experimentation and benchmarking platform",
-                className="subtitle"
-            ),
+            html.Img(src=f"{requests_pathname_prefix}assets/logo.png", className="header-logo"),
         ], className="header"),
         
         html.Div([
-            dcc.Tabs(id="tabs", value="demos", children=[
-                dcc.Tab(label="📚 Demos", value="demos", className="custom-tab"),
+            dcc.Tabs(id="tabs", value="home", children=[
+                dcc.Tab(label="🧠 Learn", value="home", className="custom-tab"),
+                dcc.Tab(label="🪄 Demos", value="demos", className="custom-tab"),
                 dcc.Tab(label="⚡ Run Benchmark", value="run-benchmark", className="custom-tab"),
                 dcc.Tab(label="📊 View Results", value="view-results", className="custom-tab"),
             ], className="tabs-container"),
@@ -821,6 +845,10 @@ def create_dash_app(requests_pathname_prefix: str = "/") -> Dash:
         # Stores for tracking state
         dcc.Store(id="execution-state", data={"running": False, "result": None}),
         dcc.Store(id="benchmark-state", data={"running": False, "result": None}),
+        # Stores for View Results tab (must be in main layout for callbacks)
+        dcc.Store(id="selected-runs", data=[]),
+        dcc.Store(id="comparison-swap-state", data=False),
+        dcc.Store(id="trigger-auto-compare", data=0),
         
         # Footer
         html.Div([
@@ -844,19 +872,43 @@ def create_dash_app(requests_pathname_prefix: str = "/") -> Dash:
     return app
 
 
+def render_home_tab():
+    """Render the home tab content with documentation."""
+    # Navigate to project root (up from src/mdbpl/frontend/dash_app.py)
+    project_root = Path(__file__).parent.parent.parent.parent
+    home_path = project_root / "docs" / "HOME.md"
+    
+    try:
+        if home_path.exists():
+            home_content = home_path.read_text(encoding='utf-8')
+        else:
+            home_content = "# Welcome\n\nWelcome to MongoDB Performance Lab!"
+    except Exception as e:
+        home_content = f"# Welcome\n\nError loading content: {e}"
+    
+    return html.Div([
+        dcc.Markdown(
+            home_content,
+            className="demo-markdown",
+            highlight_config={
+                "theme": "dark"
+            }
+        )
+    ], style={"maxWidth": "900px", "margin": "0 auto"})
+
+
 def render_demos_tab():
     """Render the demos tab content."""
     return html.Div([
-        html.Div([
-            html.Label("Select Demo:", className="label"),
-            dcc.Dropdown(
-                id="demo-selector",
-                options=[],
-                placeholder="Choose a demo to run...",
-                className="dropdown"
-            ),
-        ], className="selector-container"),
+        html.H3("Available Demos", style={"marginBottom": "20px", "color": "#0f172a"}),
         
+        # Demo list container (will be populated by callback)
+        html.Div(id="demo-list", className="demo-list"),
+        
+        # Hidden store for selected demo
+        dcc.Store(id="selected-demo", data=None),
+        
+        # Demo description (shown when a demo is selected)
         html.Div(id="demo-description", className="description"),
         
         html.Button(
@@ -965,15 +1017,29 @@ def render_view_results_tab():
                 id="compare-selected-button",
                 n_clicks=0,
                 disabled=True,
-                className="run-button"
+                className="run-button",
+                style={"marginRight": "12px"}
+            ),
+            html.Button(
+                "🗑️ Delete All Results",
+                id="delete-all-results-button",
+                n_clicks=0,
+                className="run-button",
+                style={
+                    "backgroundColor": "#ef4444",
+                    "marginLeft": "auto"
+                }
             ),
         ], style={"marginBottom": "20px", "marginTop": "20px", "display": "flex", "alignItems": "center"}),
         
+        # Confirmation dialog for delete
+        dcc.ConfirmDialog(
+            id="confirm-delete-dialog",
+            message="Are you sure you want to delete all benchmark results? This action cannot be undone."
+        ),
+        
         # List of benchmark results with checkboxes
         html.Div(id="results-list", children=[]),
-        
-        # Store for tracking selected runs
-        dcc.Store(id="selected-runs", data=[])
     ])
 
 
@@ -990,7 +1056,9 @@ def setup_callbacks(app: Dash):
     )
     def render_tab_content(tab):
         """Render content based on selected tab."""
-        if tab == "demos":
+        if tab == "home":
+            return render_home_tab()
+        elif tab == "demos":
             return render_demos_tab()
         elif tab == "run-benchmark":
             return render_run_benchmark_tab()
@@ -1000,28 +1068,83 @@ def setup_callbacks(app: Dash):
     
     # Demo tab callbacks
     @app.callback(
-        Output("demo-selector", "options"),
-        Input("demo-selector", "id")
+        Output("demo-list", "children"),
+        Input("demo-list", "id")
     )
-    def load_demos(_):
-        """Load available demos from demo registry."""
+    def load_demo_list(_):
+        """Load available demos and display as clickable cards."""
         try:
             demos = list_demos()
-            return [
-                {"label": f"{d['title']}", "value": d["name"]}
-                for d in demos
-            ]
+            demo_cards = []
+            
+            for demo in demos:
+                card = html.Div([
+                    html.Div([
+                        html.H4(demo['title'], style={"marginBottom": "8px", "color": "#0f172a"}),
+                        html.P(demo['description'], style={"color": "#64748b", "fontSize": "14px", "marginBottom": "0"}),
+                    ], style={"flex": "1"}),
+                    html.Button(
+                        "Select →",
+                        id={"type": "demo-select-btn", "index": demo['name']},
+                        n_clicks=0,
+                        style={
+                            "background": "#3b82f6",
+                            "color": "white",
+                            "border": "none",
+                            "padding": "8px 16px",
+                            "borderRadius": "6px",
+                            "cursor": "pointer",
+                            "fontSize": "14px",
+                            "fontWeight": "600"
+                        }
+                    )
+                ], className="demo-card", style={
+                    "display": "flex",
+                    "alignItems": "center",
+                    "gap": "20px",
+                    "padding": "20px",
+                    "background": "#f8fafc",
+                    "borderRadius": "8px",
+                    "border": "1px solid #e2e8f0",
+                    "marginBottom": "12px",
+                    "cursor": "pointer",
+                    "transition": "all 0.2s"
+                })
+                demo_cards.append(card)
+            
+            return demo_cards
         except Exception as e:
-            return [{"label": f"Error loading demos: {e}", "value": "error"}]
+            return html.Div(f"Error loading demos: {e}", style={"color": "#ef4444"})
+    
+    @app.callback(
+        Output("selected-demo", "data"),
+        Input({"type": "demo-select-btn", "index": ALL}, "n_clicks"),
+        prevent_initial_call=True
+    )
+    def select_demo(n_clicks):
+        """Handle demo selection from button clicks."""
+        if not callback_context.triggered:
+            return no_update
+        
+        # Get which button was clicked
+        triggered_id = callback_context.triggered[0]["prop_id"]
+        if not triggered_id or triggered_id == ".":
+            return no_update
+        
+        # Parse the button ID to get demo name
+        button_id = json.loads(triggered_id.split(".")[0])
+        demo_name = button_id["index"]
+        
+        return demo_name
     
     @app.callback(
         [Output("demo-description", "children"),
          Output("run-button", "disabled")],
-        Input("demo-selector", "value")
+        Input("selected-demo", "data")
     )
     def update_demo_info(demo_name):
         """Display demo description when selected."""
-        if not demo_name or demo_name == "error":
+        if not demo_name:
             return "", True
         
         try:
@@ -1030,6 +1153,8 @@ def setup_callbacks(app: Dash):
             
             # Use dcc.Markdown to render the content with syntax highlighting
             return html.Div([
+                html.Hr(style={"margin": "30px 0", "border": "none", "borderTop": "2px solid #e2e8f0"}),
+                html.H3("Demo Details", style={"marginBottom": "20px", "color": "#0f172a"}),
                 dcc.Markdown(
                     markdown_content,
                     className="demo-markdown",
@@ -1046,7 +1171,7 @@ def setup_callbacks(app: Dash):
          Output("run-button", "disabled", allow_duplicate=True),
          Output("interval-component", "disabled", allow_duplicate=True)],
         Input("run-button", "n_clicks"),
-        [State("demo-selector", "value"),
+        [State("selected-demo", "data"),
          State("execution-state", "data")],
         prevent_initial_call=True
     )
@@ -1201,8 +1326,6 @@ def setup_callbacks(app: Dash):
         # Create visualizations
         summary = create_summary_box(baseline, optimized, comparison, changes)
         changes_display = create_changes_display(changes)
-        charts = create_comparison_charts(baseline, optimized, comparison)
-        table = create_metrics_table(baseline, optimized, comparison)
         timeline = create_timeline(steps)
         
         return html.Div([
@@ -1217,15 +1340,29 @@ def setup_callbacks(app: Dash):
                 changes_display,
             ], className="section"),
             
+            # View detailed comparison button
             html.Div([
-                html.H3("Performance Comparison", className="section-title"),
-                html.Div(charts, className="charts-container"),
-            ], className="section"),
-            
-            html.Div([
-                html.H3("Detailed Metrics", className="section-title"),
-                table,
-            ], className="section"),
+                html.Button(
+                    "📊 View Detailed Comparison in Results Tab",
+                    id={"type": "view-comparison", "baseline": baseline['id'], "optimized": optimized['id']},
+                    n_clicks=0,
+                    style={
+                        "padding": "12px 24px",
+                        "backgroundColor": "#3b82f6",
+                        "color": "white",
+                        "border": "none",
+                        "borderRadius": "8px",
+                        "cursor": "pointer",
+                        "fontSize": "16px",
+                        "fontWeight": "600",
+                        "boxShadow": "0 2px 4px rgba(0,0,0,0.1)",
+                        "transition": "all 0.2s",
+                        "width": "100%",
+                        "marginTop": "20px",
+                        "marginBottom": "20px"
+                    }
+                ),
+            ], style={"textAlign": "center"}),
             
             html.Div([
                 html.H3("Execution Timeline", className="section-title"),
@@ -1426,14 +1563,27 @@ def setup_callbacks(app: Dash):
     
     # Handle compare button click
     @app.callback(
-        Output("comparison-from-results", "children"),
-        Input("compare-selected-button", "n_clicks"),
-        State("selected-runs", "data")
+        [Output("comparison-from-results", "children"),
+         Output("comparison-swap-state", "data")],
+        [Input("compare-selected-button", "n_clicks"),
+         Input({"type": "swap-comparison", "index": ALL}, "n_clicks"),
+         Input("trigger-auto-compare", "data")],
+        [State("selected-runs", "data"),
+         State("comparison-swap-state", "data")],
+        prevent_initial_call=True
     )
-    def compare_selected_runs(n_clicks, selected_runs):
+    def compare_selected_runs(compare_clicks, swap_clicks, auto_trigger, selected_runs, is_swapped):
         """Compare two selected runs."""
-        if n_clicks == 0 or not selected_runs or len(selected_runs) != 2:
-            return html.Div()
+        ctx = callback_context
+        
+        # Check if swap button was clicked
+        if ctx.triggered:
+            trigger_id = ctx.triggered[0]["prop_id"]
+            if "swap-comparison" in trigger_id:
+                is_swapped = not is_swapped
+        
+        if not selected_runs or len(selected_runs) != 2:
+            return html.Div(), is_swapped
         
         try:
             # Get the two runs
@@ -1441,14 +1591,22 @@ def setup_callbacks(app: Dash):
             run2 = storage.get_run_by_id(selected_runs[1])
             
             if not run1 or not run2:
-                return html.Div("❌ Could not find selected runs.", className="error")
+                return html.Div("❌ Could not find selected runs.", className="error"), is_swapped
             
-            # Normalize data structure
-            baseline = run1
-            optimized = run2
+            # Swap order if requested
+            if is_swapped:
+                first_run = run2
+                second_run = run1
+                first_label = f"Run 2 ({run2.get('tag', 'untagged')})"
+                second_label = f"Run 1 ({run1.get('tag', 'untagged')})"
+            else:
+                first_run = run1
+                second_run = run2
+                first_label = f"Run 1 ({run1.get('tag', 'untagged')})"
+                second_label = f"Run 2 ({run2.get('tag', 'untagged')})"
             
-            baseline['throughput'] = baseline.get('operations_per_second', 0)
-            optimized['throughput'] = optimized.get('operations_per_second', 0)
+            first_run['throughput'] = first_run.get('operations_per_second', 0)
+            second_run['throughput'] = second_run.get('operations_per_second', 0)
             
             # Calculate deltas
             def calculate_delta(val1, val2):
@@ -1457,10 +1615,10 @@ def setup_callbacks(app: Dash):
                 return ((val2 - val1) / val1) * 100
             
             improvements = {
-                'throughput_percent': calculate_delta(baseline['operations_per_second'], optimized['operations_per_second']),
-                'latency_p50_percent': calculate_delta(baseline['latency_p50'], optimized['latency_p50']),
-                'latency_p95_percent': calculate_delta(baseline['latency_p95'], optimized['latency_p95']),
-                'latency_p99_percent': calculate_delta(baseline['latency_p99'], optimized['latency_p99']),
+                'throughput_percent': calculate_delta(first_run['operations_per_second'], second_run['operations_per_second']),
+                'latency_p50_percent': calculate_delta(first_run['latency_p50'], second_run['latency_p50']),
+                'latency_p95_percent': calculate_delta(first_run['latency_p95'], second_run['latency_p95']),
+                'latency_p99_percent': calculate_delta(first_run['latency_p99'], second_run['latency_p99']),
             }
             
             comparison_normalized = {'improvements': improvements}
@@ -1474,34 +1632,53 @@ def setup_callbacks(app: Dash):
                     return None
                 return (returned / examined) * 100
             
-            baseline_efficiency = calc_efficiency(
-                baseline.get('total_docs_examined', 0),
-                baseline.get('total_docs_returned', 0)
+            first_efficiency = calc_efficiency(
+                first_run.get('total_docs_examined', 0),
+                first_run.get('total_docs_returned', 0)
             )
-            optimized_efficiency = calc_efficiency(
-                optimized.get('total_docs_examined', 0),
-                optimized.get('total_docs_returned', 0)
+            second_efficiency = calc_efficiency(
+                second_run.get('total_docs_examined', 0),
+                second_run.get('total_docs_returned', 0)
             )
             
             # Create comparison display
             return html.Div([
-                html.H3("📊 Comparison Results", className="results-title", style={"marginTop": "0px", "marginBottom": "20px"}),
+                # Header with swap button
+                html.Div([
+                    html.H3("📊 Comparison Results", className="results-title", style={"marginTop": "0px", "marginBottom": "0px"}),
+                    html.Button(
+                        "⇄ Swap Order",
+                        id={"type": "swap-comparison", "index": 0},
+                        n_clicks=0,
+                        style={
+                            "padding": "8px 16px",
+                            "backgroundColor": "#f1f5f9",
+                            "color": "#475569",
+                            "border": "1px solid #cbd5e1",
+                            "borderRadius": "6px",
+                            "cursor": "pointer",
+                            "fontSize": "14px",
+                            "fontWeight": "500",
+                            "transition": "all 0.2s"
+                        }
+                    )
+                ], style={"display": "flex", "justifyContent": "space-between", "alignItems": "center", "marginBottom": "20px"}),
                 
                 # Run details
                 html.Div([
                     html.Div("Comparing Runs", className="summary-title"),
                     html.Div([
                         html.Div([
-                            html.Div("Run 1", style={"fontSize": "12px", "color": "#64748b", "marginBottom": "4px", "textTransform": "uppercase", "fontWeight": "600"}),
-                            html.Div(f"{baseline['workload_name']}", style={"fontSize": "16px", "fontWeight": "600", "marginBottom": "4px"}),
-                            html.Div(f"Tag: {baseline.get('tag', 'untagged')}", style={"fontSize": "14px", "color": "#64748b"}),
-                            html.Div(f"Run ID: {baseline['id']}", style={"fontSize": "12px", "color": "#94a3b8"}),
+                            html.Div(first_label, style={"fontSize": "12px", "color": "#64748b", "marginBottom": "4px", "textTransform": "uppercase", "fontWeight": "600"}),
+                            html.Div(f"{first_run['workload_name']}", style={"fontSize": "16px", "fontWeight": "600", "marginBottom": "4px"}),
+                            html.Div(f"Tag: {first_run.get('tag', 'untagged')}", style={"fontSize": "14px", "color": "#64748b"}),
+                            html.Div(f"Run ID: {first_run['id']}", style={"fontSize": "12px", "color": "#94a3b8"}),
                         ], style={"padding": "12px", "backgroundColor": "#f8fafc", "borderRadius": "6px", "border": "1px solid #e2e8f0"}),
                         html.Div([
-                            html.Div("Run 2", style={"fontSize": "12px", "color": "#64748b", "marginBottom": "4px", "textTransform": "uppercase", "fontWeight": "600"}),
-                            html.Div(f"{optimized['workload_name']}", style={"fontSize": "16px", "fontWeight": "600", "marginBottom": "4px"}),
-                            html.Div(f"Tag: {optimized.get('tag', 'untagged')}", style={"fontSize": "14px", "color": "#64748b"}),
-                            html.Div(f"Run ID: {optimized['id']}", style={"fontSize": "12px", "color": "#94a3b8"}),
+                            html.Div(second_label, style={"fontSize": "12px", "color": "#64748b", "marginBottom": "4px", "textTransform": "uppercase", "fontWeight": "600"}),
+                            html.Div(f"{second_run['workload_name']}", style={"fontSize": "16px", "fontWeight": "600", "marginBottom": "4px"}),
+                            html.Div(f"Tag: {second_run.get('tag', 'untagged')}", style={"fontSize": "14px", "color": "#64748b"}),
+                            html.Div(f"Run ID: {second_run['id']}", style={"fontSize": "12px", "color": "#94a3b8"}),
                         ], style={"padding": "12px", "backgroundColor": "#f8fafc", "borderRadius": "6px", "border": "1px solid #e2e8f0"}),
                     ], style={"display": "grid", "gridTemplateColumns": "1fr 1fr", "gap": "16px", "marginTop": "12px"}),
                 ], style={"marginBottom": "20px", "padding": "16px", "backgroundColor": "white", "borderRadius": "8px", "border": "1px solid #e2e8f0"}),
@@ -1512,12 +1689,12 @@ def setup_callbacks(app: Dash):
                     html.Div([
                         html.Div([
                             html.Div("Throughput Change", className="summary-label"),
-                            html.Div(f"{baseline['operations_per_second']:.1f} → {optimized['operations_per_second']:.1f} ops/sec", className="summary-value"),
+                            html.Div(f"{first_run['operations_per_second']:.1f} → {second_run['operations_per_second']:.1f} ops/sec", className="summary-value"),
                             html.Div(f"{'+' if throughput_change > 0 else ''}{throughput_change:.1f}%", className="summary-change"),
                         ], className="summary-item"),
                         html.Div([
                             html.Div("Latency P95 Change", className="summary-label"),
-                            html.Div(f"{baseline['latency_p95']:.2f} → {optimized['latency_p95']:.2f} ms", className="summary-value"),
+                            html.Div(f"{first_run['latency_p95']:.2f} → {second_run['latency_p95']:.2f} ms", className="summary-value"),
                             html.Div(f"{'-' if latency_change < 0 else '+'}{abs(latency_change):.1f}%", className="summary-change"),
                         ], className="summary-item"),
                     ], className="summary-grid"),
@@ -1528,39 +1705,39 @@ def setup_callbacks(app: Dash):
                     html.Div("Query Efficiency", className="summary-title"),
                     html.Div([
                         html.Div([
-                            html.Div("Run 1", style={"fontSize": "12px", "color": "#64748b", "marginBottom": "8px", "fontWeight": "600"}),
-                            html.Div(f"Docs Examined: {baseline.get('total_docs_examined', 0):,}", style={"fontSize": "14px", "marginBottom": "4px", "color": "#64748b"}),
-                            html.Div(f"Docs Returned: {baseline.get('total_docs_returned', 0):,}", style={"fontSize": "14px", "marginBottom": "4px", "color": "#64748b"}),
+                            html.Div(first_label, style={"fontSize": "12px", "color": "#64748b", "marginBottom": "8px", "fontWeight": "600"}),
+                            html.Div(f"Docs Examined: {first_run.get('total_docs_examined', 0):,}", style={"fontSize": "14px", "marginBottom": "4px", "color": "#64748b"}),
+                            html.Div(f"Docs Returned: {first_run.get('total_docs_returned', 0):,}", style={"fontSize": "14px", "marginBottom": "4px", "color": "#64748b"}),
                             html.Div([
                                 html.Span("Efficiency: ", style={"fontSize": "14px", "color": "#64748b"}),
                                 html.Span(
-                                    f"{baseline_efficiency:.1f}%" if baseline_efficiency else "N/A",
+                                    f"{first_efficiency:.1f}%" if first_efficiency else "N/A",
                                     style={
                                         "fontSize": "16px",
                                         "fontWeight": "600",
-                                        "color": "#22c55e" if baseline_efficiency and baseline_efficiency > 80 else "#f59e0b" if baseline_efficiency and baseline_efficiency > 50 else "#ef4444"
+                                        "color": "#22c55e" if first_efficiency and first_efficiency > 80 else "#f59e0b" if first_efficiency and first_efficiency > 50 else "#ef4444"
                                     }
                                 )
                             ]),
-                            html.Div(f"Index Scans: {baseline.get('index_scans', 0)} | Collection Scans: {baseline.get('collection_scans', 0)}",
+                            html.Div(f"Index Scans: {first_run.get('index_scans', 0)} | Collection Scans: {first_run.get('collection_scans', 0)}",
                                     style={"fontSize": "12px", "color": "#64748b", "marginTop": "8px"}),
                         ], style={"padding": "12px", "backgroundColor": "#f8fafc", "borderRadius": "6px", "border": "1px solid #e2e8f0"}),
                         html.Div([
-                            html.Div("Run 2", style={"fontSize": "12px", "color": "#64748b", "marginBottom": "8px", "fontWeight": "600"}),
-                            html.Div(f"Docs Examined: {optimized.get('total_docs_examined', 0):,}", style={"fontSize": "14px", "marginBottom": "4px", "color": "#64748b"}),
-                            html.Div(f"Docs Returned: {optimized.get('total_docs_returned', 0):,}", style={"fontSize": "14px", "marginBottom": "4px", "color": "#64748b"}),
+                            html.Div(second_label, style={"fontSize": "12px", "color": "#64748b", "marginBottom": "8px", "fontWeight": "600"}),
+                            html.Div(f"Docs Examined: {second_run.get('total_docs_examined', 0):,}", style={"fontSize": "14px", "marginBottom": "4px", "color": "#64748b"}),
+                            html.Div(f"Docs Returned: {second_run.get('total_docs_returned', 0):,}", style={"fontSize": "14px", "marginBottom": "4px", "color": "#64748b"}),
                             html.Div([
                                 html.Span("Efficiency: ", style={"fontSize": "14px", "color": "#64748b"}),
                                 html.Span(
-                                    f"{optimized_efficiency:.1f}%" if optimized_efficiency else "N/A",
+                                    f"{second_efficiency:.1f}%" if second_efficiency else "N/A",
                                     style={
                                         "fontSize": "16px",
                                         "fontWeight": "600",
-                                        "color": "#22c55e" if optimized_efficiency and optimized_efficiency > 80 else "#f59e0b" if optimized_efficiency and optimized_efficiency > 50 else "#ef4444"
+                                        "color": "#22c55e" if second_efficiency and second_efficiency > 80 else "#f59e0b" if second_efficiency and second_efficiency > 50 else "#ef4444"
                                     }
                                 )
                             ]),
-                            html.Div(f"Index Scans: {optimized.get('index_scans', 0)} | Collection Scans: {optimized.get('collection_scans', 0)}",
+                            html.Div(f"Index Scans: {second_run.get('index_scans', 0)} | Collection Scans: {second_run.get('collection_scans', 0)}",
                                     style={"fontSize": "12px", "color": "#64748b", "marginTop": "8px"}),
                         ], style={"padding": "12px", "backgroundColor": "#f8fafc", "borderRadius": "6px", "border": "1px solid #e2e8f0"}),
                     ], style={"display": "grid", "gridTemplateColumns": "1fr 1fr", "gap": "16px", "marginTop": "12px"}),
@@ -1575,12 +1752,88 @@ def setup_callbacks(app: Dash):
                 # Detailed metrics
                 html.Div([
                     html.H4("Detailed Metrics", style={"marginTop": "30px", "marginBottom": "16px"}),
-                    create_metrics_table(baseline, optimized, comparison_normalized),
+                    create_metrics_table(first_run, second_run, comparison_normalized, baseline_label=first_label, optimized_label=second_label),
                 ]),
-            ], style={"marginBottom": "30px"})
+            ], style={"marginBottom": "30px"}), is_swapped
             
         except Exception as e:
-            return html.Div(f"❌ Error comparing runs: {e}", className="error")
+            return html.Div(f"❌ Error comparing runs: {e}", className="error"), is_swapped
+
+    # Handle view comparison button from demo tab
+    @app.callback(
+        [Output("tabs", "value"),
+         Output("selected-runs", "data"),
+         Output("trigger-auto-compare", "data")],
+        Input({"type": "view-comparison", "baseline": ALL, "optimized": ALL}, "n_clicks"),
+        State("trigger-auto-compare", "data"),
+        prevent_initial_call=True
+    )
+    def navigate_to_comparison(n_clicks, current_trigger):
+        """Navigate to Results tab and auto-compare runs when view comparison button is clicked."""
+        ctx = callback_context
+        
+        if not ctx.triggered or not any(n_clicks):
+            return no_update, no_update, no_update
+        
+        # Extract baseline and optimized IDs from button id
+        trigger_id = ctx.triggered[0]["prop_id"]
+        # Parse the JSON id from the prop_id string
+        id_str = trigger_id.split(".")[0]
+        button_id = json.loads(id_str)
+        
+        baseline_id = button_id["baseline"]
+        optimized_id = button_id["optimized"]
+        
+        # Switch to results tab, select both runs, and trigger comparison
+        return "view-results", [baseline_id, optimized_id], current_trigger + 1
+
+    # Handle delete all results button click
+    @app.callback(
+        Output("confirm-delete-dialog", "displayed"),
+        Input("delete-all-results-button", "n_clicks"),
+        prevent_initial_call=True
+    )
+    def show_delete_confirmation(n_clicks):
+        """Show confirmation dialog when delete button is clicked."""
+        if n_clicks > 0:
+            return True
+        return False
+    
+    # Handle confirmation dialog result
+    @app.callback(
+        Output("results-list", "children", allow_duplicate=True),
+        Input("confirm-delete-dialog", "submit_n_clicks"),
+        prevent_initial_call=True
+    )
+    def delete_all_results(submit_clicks):
+        """Delete all results when user confirms."""
+        if submit_clicks:
+            try:
+                storage.reset_db()
+                return html.Div(
+                    "✅ All results deleted successfully. Click Refresh to reload.",
+                    style={
+                        "padding": "20px",
+                        "backgroundColor": "#dcfce7",
+                        "border": "1px solid #86efac",
+                        "borderRadius": "8px",
+                        "color": "#166534",
+                        "textAlign": "center"
+                    }
+                )
+            except Exception as e:
+                return html.Div(
+                    f"❌ Error deleting results: {e}",
+                    style={
+                        "padding": "20px",
+                        "backgroundColor": "#fee2e2",
+                        "border": "1px solid #fca5a5",
+                        "borderRadius": "8px",
+                        "color": "#991b1b",
+                        "textAlign": "center"
+                    }
+                )
+        return no_update
 
 
 def extract_changes(steps: list) -> list:
@@ -1618,7 +1871,7 @@ def create_summary_box(baseline: dict, optimized: dict, comparison: dict, change
     
     # Determine if improvement or degradation
     throughput_sign = "+" if throughput_change > 0 else ""
-    latency_sign = "-" if latency_change > 0 else "+"
+    latency_sign = "-" if latency_change < 0 else "+"  # Negative change = improvement for latency
     
     return html.Div([
         html.Div("Performance Impact Summary", className="summary-title"),
@@ -1711,7 +1964,7 @@ def create_comparison_charts(baseline: dict, optimized: dict, comparison: dict) 
     ], style={"display": "flex", "gap": "20px", "flexWrap": "wrap"})
 
 
-def create_metrics_table(baseline: dict, optimized: dict, comparison: dict) -> html.Div:
+def create_metrics_table(baseline: dict, optimized: dict, comparison: dict, baseline_label: str = "Run 1", optimized_label: str = "Run 2") -> html.Div:
     """Create detailed metrics comparison table."""
     
     improvements = comparison.get("improvements", {}) if comparison else {}
@@ -1719,8 +1972,8 @@ def create_metrics_table(baseline: dict, optimized: dict, comparison: dict) -> h
     rows = [
         html.Tr([
             html.Th("Metric"),
-            html.Th("Run 1"),
-            html.Th("Run 2"),
+            html.Th(baseline_label),
+            html.Th(optimized_label),
             html.Th("Change"),
         ], className="table-header")
     ]
@@ -1749,8 +2002,8 @@ def create_metrics_table(baseline: dict, optimized: dict, comparison: dict) -> h
                 html.Td(f"{baseline[key]:.3f}"),
                 html.Td(f"{optimized[key]:.3f}"),
                 html.Td(
-                    f"-{change:.1f}%" if change > 0 else f"+{abs(change):.1f}%",
-                    className="improvement" if change > 0 else "degradation"
+                    f"{change:+.1f}%",  # Use :+ format to show sign correctly
+                    className="improvement" if change < 0 else "degradation"  # Negative change = improvement for latency
                 ),
             ]))
     

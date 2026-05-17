@@ -90,13 +90,22 @@ class OverindexingDemo(Demo):
                 tag="no-index"
             )
             
-            self.storage.save_result(baseline_result, tag="no-index")
+            baseline_id = self.storage.save_result(baseline_result, tag="no-index")
             step2.completed_at = datetime.now()
             step2.result = {
+                "id": baseline_id,
+                "workload_name": baseline_result.workload_name,
+                "tag": "no-index",
                 "throughput": baseline_result.operations_per_second,
+                "operations_per_second": baseline_result.operations_per_second,
                 "latency_p50": baseline_result.latency_p50,
                 "latency_p95": baseline_result.latency_p95,
+                "latency_p99": baseline_result.latency_p99,
                 "total_operations": baseline_result.total_operations,
+                "total_docs_examined": baseline_result.total_docs_examined,
+                "total_docs_returned": baseline_result.total_docs_returned,
+                "index_scans": baseline_result.index_scans,
+                "collection_scans": baseline_result.collection_scans,
             }
             result.steps.append(step2)
             
@@ -164,13 +173,22 @@ class OverindexingDemo(Demo):
                 tag="over-indexed"
             )
             
-            self.storage.save_result(many_indexes_result, tag="over-indexed")
+            many_indexed_id = self.storage.save_result(many_indexes_result, tag="over-indexed")
             step6.completed_at = datetime.now()
             step6.result = {
+                "id": many_indexed_id,
+                "workload_name": many_indexes_result.workload_name,
+                "tag": "over-indexed",
                 "throughput": many_indexes_result.operations_per_second,
+                "operations_per_second": many_indexes_result.operations_per_second,
                 "latency_p50": many_indexes_result.latency_p50,
                 "latency_p95": many_indexes_result.latency_p95,
+                "latency_p99": many_indexes_result.latency_p99,
                 "total_operations": many_indexes_result.total_operations,
+                "total_docs_examined": many_indexes_result.total_docs_examined,
+                "total_docs_returned": many_indexes_result.total_docs_returned,
+                "index_scans": many_indexes_result.index_scans,
+                "collection_scans": many_indexes_result.collection_scans,
             }
             result.steps.append(step6)
             
