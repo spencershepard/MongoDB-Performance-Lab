@@ -6,7 +6,7 @@ import os
 
 from .base import Demo, DemoStep, DemoResult
 from ..ycsb import load_ycsb_data
-from ..dsl.loader import WorkloadLoader
+from ..workloads import create_write_heavy_benchmark
 from ..executor import WorkloadExecutor
 from ..storage import BenchmarkStorage
 
@@ -78,9 +78,10 @@ class OverindexingDemo(Demo):
             # Drop any existing indexes to ensure clean baseline
             self.collection.drop_indexes()
             
-            workload_spec = WorkloadLoader.load_builtin("write-heavy")
+            # Create Python benchmark using write-heavy workload
+            benchmark = create_write_heavy_benchmark(record_count=100000)
             executor = WorkloadExecutor(
-                workload=workload_spec,
+                workload=benchmark,
                 mongodb_uri=self.mongodb_uri,
                 record_count=100000
             )

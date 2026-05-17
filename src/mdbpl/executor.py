@@ -1,4 +1,4 @@
-"""Workload executor - runs DSL workloads and collects metrics."""
+"""Workload executor - runs Python benchmark workloads and collects metrics."""
 
 import time
 import random
@@ -8,9 +8,122 @@ from typing import Dict, List, Any, Optional
 from dataclasses import dataclass, field
 from pymongo import MongoClient
 from pymongo.collection import Collection
+from pymongo.cursor import Cursor
 
-from .dsl.models import WorkloadSpec, OperationSpec
-from .dsl.compiler import DSLCompiler
+from .workload import Benchmark
+
+
+class ExplainCapturingCollection:
+    """Wrapper around pymongo Collection that captures query info for explain sampling."""
+    
+    def __init__(self, collection: Collection):
+        self.collection = collection
+        self.last_query = None
+        self.last_result_count = 0
+    
+    def find(self, filter=None, projection=None, **kwargs):
+        """Wrap find() to capture query parameters."""
+        # Capture query info for potential explain
+        self.last_query = {
+            'filter': filter or {},
+            'projection': projection,
+            'limit': kwargs.get('limit'),
+            'sort': None  # Will be set by sort() call if chained
+        }
+        
+        # Execute actual find
+        cursor = self.collection.find(filter, projection, **kwargs)
+        
+        # Wrap cursor to capture result count
+        return ExplainCapturingCursor(cursor, self)
+    
+    def find_one(self, filter=None, projection=None, **kwargs):
+        """Wrap find_one() to capture query parameters."""
+        self.last_query = {
+            'filter': filter or {},
+            'projection': projection,
+            'limit': 1,
+            'sort': None
+        }
+        
+        result = self.collection.find_one(filter, projection, **kwargs)
+        self.last_result_count = 1 if result else 0
+        return result
+    
+    def update_one(self, filter, update, **kwargs):
+        """Pass through update_one (no explain needed for writes)."""
+        self.last_query = None  # No explain for writes
+        return self.collection.update_one(filter, update, **kwargs)
+    
+    def update_many(self, filter, update, **kwargs):
+        """Pass through update_many (no explain needed for writes)."""
+        self.last_query = None
+        return self.collection.update_many(filter, update, **kwargs)
+    
+    def insert_one(self, document, **kwargs):
+        """Pass through insert_one (no explain needed for writes)."""
+        self.last_query = None
+        return self.collection.insert_one(document, **kwargs)
+    
+    def insert_many(self, documents, **kwargs):
+        """Pass through insert_many (no explain needed for writes)."""
+        self.last_query = None
+        return self.collection.insert_many(documents, **kwargs)
+    
+    def aggregate(self, pipeline, **kwargs):
+        """Pass through aggregate (complex explain, skip for now)."""
+        self.last_query = None  # Could add aggregate explain support later
+        return self.collection.aggregate(pipeline, **kwargs)
+    
+    def __getattr__(self, name):
+        """Pass through any other methods to the underlying collection."""
+        return getattr(self.collection, name)
+
+
+class ExplainCapturingCursor:
+    """Wrapper around pymongo Cursor that captures sort/limit and result count."""
+    
+    def __init__(self, cursor: Cursor, parent: ExplainCapturingCollection):
+        self.cursor = cursor
+        self.parent = parent
+    
+    def sort(self, key_or_list, direction=None):
+        """Capture sort parameters."""
+        if isinstance(key_or_list, str):
+            # Single field sort: sort("field", 1)
+            self.parent.last_query['sort'] = {key_or_list: direction}
+        elif isinstance(key_or_list, list):
+            # List of tuples: sort([("field1", 1), ("field2", -1)])
+            self.parent.last_query['sort'] = dict(key_or_list)
+        else:
+            # Dict or other format
+            self.parent.last_query['sort'] = key_or_list
+        
+        return ExplainCapturingCursor(self.cursor.sort(key_or_list, direction) if direction else self.cursor.sort(key_or_list), self.parent)
+    
+    def limit(self, n):
+        """Capture limit parameter."""
+        self.parent.last_query['limit'] = n
+        return ExplainCapturingCursor(self.cursor.limit(n), self.parent)
+    
+    def skip(self, n):
+        """Capture skip parameter."""
+        if 'skip' not in self.parent.last_query:
+            self.parent.last_query['skip'] = 0
+        self.parent.last_query['skip'] = n
+        return ExplainCapturingCursor(self.cursor.skip(n), self.parent)
+    
+    def __iter__(self):
+        """Iterate through results and count them."""
+        count = 0
+        for doc in self.cursor:
+            count += 1
+            yield doc
+        self.parent.last_result_count = count
+    
+    def __getattr__(self, name):
+        """Pass through any other methods to the underlying cursor."""
+        return getattr(self.cursor, name)
 
 
 @dataclass
@@ -108,348 +221,134 @@ class BenchmarkResult:
             self.collection_scans = int(self.collection_scans * sampling_ratio)
 
 
-class Distribution:
-    """Base class for key distributions."""
-    
-    def __init__(self, record_count: int):
-        self.record_count = record_count
-    
-    def next_key(self) -> str:
-        """Generate the next key."""
-        raise NotImplementedError
-
-
-class UniformDistribution(Distribution):
-    """Uniform random distribution - all keys equally likely."""
-    
-    def next_key(self) -> str:
-        """Generate a uniformly random key."""
-        key_num = random.randint(0, self.record_count - 1)
-        # YCSB format with insertorder=ordered: user0, user1, user2, ...
-        return f"user{key_num}"
-
-
-class LatestDistribution(Distribution):
-    """Latest distribution - bias toward recently inserted keys."""
-    
-    def __init__(self, record_count: int):
-        super().__init__(record_count)
-        self.zipfian = ZipfianDistribution(record_count)
-    
-    def next_key(self) -> str:
-        """Generate a key biased toward recent inserts."""
-        # Use Zipfian but start from the end
-        zipf_key = self.zipfian.next_key()
-        # Extract number from YCSB format "userN"
-        key_num = int(zipf_key.replace("user", ""))
-        # Invert to get recent keys
-        inverted = self.record_count - key_num - 1
-        # YCSB format with insertorder=ordered: user0, user1, user2, ...
-        return f"user{inverted}"
-
-
-class ZipfianDistribution(Distribution):
-    """
-    Zipfian distribution - power law where small number of items are hot.
-    
-    Based on YCSB implementation. Follows 80/20 rule where ~20% of keys
-    account for ~80% of accesses.
-    """
-    
-    def __init__(self, record_count: int, theta: float = 0.99):
-        """
-        Initialize Zipfian distribution.
-        
-        Args:
-            record_count: Number of records in the dataset
-            theta: Skewness parameter (0.99 is typical, higher = more skewed)
-        """
-        super().__init__(record_count)
-        self.theta = theta
-        self.alpha = 1.0 / (1.0 - theta)
-        self.zeta_n = self._zeta(record_count, theta)
-        self.zeta_2 = self._zeta(2, theta)
-        self.eta = (1.0 - math.pow(2.0 / record_count, 1.0 - theta)) / (1.0 - self.zeta_2 / self.zeta_n)
-    
-    def _zeta(self, n: int, theta: float) -> float:
-        """Calculate zeta constant for Zipfian distribution."""
-        # For large n, use approximation to avoid slow computation
-        if n > 10000:
-            return self._zeta_approx(n, theta)
-        
-        sum_val = 0.0
-        for i in range(1, n + 1):
-            sum_val += 1.0 / math.pow(i, theta)
-        return sum_val
-    
-    def _zeta_approx(self, n: int, theta: float) -> float:
-        """Approximate zeta for large n."""
-        # Use integral approximation
-        return 1.0 + math.pow(0.5, theta) + (math.pow(n, 1.0 - theta) / (1.0 - theta))
-    
-    def next_key(self) -> str:
-        """Generate a Zipfian-distributed key."""
-        u = random.random()
-        uz = u * self.zeta_n
-        
-        if uz < 1.0:
-            key_num = 0
-        elif uz < 1.0 + math.pow(0.5, self.theta):
-            key_num = 1
-        else:
-            spread = self.record_count
-            key_num = int(spread * math.pow(self.eta * (u - 1.0) + 1.0, self.alpha))
-        
-        # Ensure key is in valid range
-        key_num = max(0, min(key_num, self.record_count - 1))
-        # YCSB format with insertorder=ordered: user0, user1, user2, ...
-        return f"user{key_num}"
-
-
-class ParameterGenerator:
-    """Generates parameters for workload operations based on distribution."""
-    
-    def __init__(self, distribution: Distribution):
-        self.distribution = distribution
-    
-    def generate(self, param_name: str) -> Any:
-        """
-        Generate a parameter value.
-        
-        Args:
-            param_name: Name of the parameter to generate
-            
-        Returns:
-            Generated parameter value
-        """
-        # For userId parameter, use distribution to get a key
-        if param_name == "userId":
-            return self.distribution.next_key()
-        elif param_name == "rangeStart":
-            # For range queries on numeric score field (0 to record_count)
-            # Generate a random starting point that will match some data
-            return random.randint(0, self.distribution.record_count)
-        else:
-            # For other parameters, generate random alphanumeric strings
-            import string
-            return ''.join(random.choices(string.ascii_letters + string.digits, k=20))
-
-
 class WorkloadExecutor:
-    """Executes DSL workloads and collects performance metrics."""
+    """Executes Python Benchmark workloads, collecting performance metrics."""
     
-    def __init__(self, workload: WorkloadSpec, mongodb_uri: str, record_count: int):
+    def __init__(self, workload: Benchmark, mongodb_uri: str, record_count: int):
         """
         Initialize workload executor.
         
         Args:
-            workload: Workload specification from DSL
+            workload: Python Benchmark workload
             mongodb_uri: MongoDB connection string
             record_count: Number of records in the dataset (for distribution)
         """
-        self.workload = workload
         self.mongodb_uri = mongodb_uri
         self.record_count = record_count
+        self.benchmark = workload
         
-        # Initialize compiler
-        self.compiler = DSLCompiler(workload)
-        
-        # Initialize distribution
-        dist_type = workload.distribution.type
-        if dist_type == "zipfian":
-            self.distribution = ZipfianDistribution(record_count)
-        elif dist_type == "uniform":
-            self.distribution = UniformDistribution(record_count)
-        elif dist_type == "latest":
-            self.distribution = LatestDistribution(record_count)
-        else:
-            raise ValueError(f"Unknown distribution type: {dist_type}")
-        
-        # Initialize parameter generator
-        self.param_generator = ParameterGenerator(self.distribution)
-        
-        # Build operation selector based on weights
+        # Build operation selector for weighted random selection
         self.operation_selector = self._build_operation_selector()
     
-    def _build_operation_selector(self) -> List[OperationSpec]:
-        """Build weighted operation selector."""
+    def _build_operation_selector(self) -> List:
+        """Build weighted operation selector for Python Benchmark."""
         operations = []
-        for op in self.workload.operations:
+        for op in self.benchmark.operations:
             # Repeat operation 'weight' times for weighted random selection
             operations.extend([op] * op.weight)
         return operations
     
-    def _select_operation(self) -> OperationSpec:
+    def _select_operation(self):
         """Select an operation based on weights."""
         return random.choice(self.operation_selector)
     
-    def _generate_parameters(self, operation: OperationSpec) -> Dict[str, Any]:
-        """Generate parameters required by an operation."""
-        params = {}
-        
-        # Extract parameter names from the operation
-        # This is simplified - in production, you'd walk the entire operation tree
-        if operation.filter:
-            params = self._extract_params_from_filter(operation.filter)
-        
-        # Generate values for each parameter
-        generated_params = {}
-        for param_name in params:
-            generated_params[param_name] = self.param_generator.generate(param_name)
-        
-        return generated_params
-    
-    def _extract_params_from_filter(self, filter_spec) -> set:
-        """Extract parameter names from a filter specification."""
-        params = set()
-        
-        from .dsl.models import FilterCondition, CompoundFilter
-        
-        if isinstance(filter_spec, FilterCondition):
-            if filter_spec.value and filter_spec.value.type == "param":
-                params.add(filter_spec.value.param)
-        elif isinstance(filter_spec, CompoundFilter):
-            if filter_spec.and_:
-                for cond in filter_spec.and_:
-                    params.update(self._extract_params_from_filter(cond))
-            if filter_spec.or_:
-                for cond in filter_spec.or_:
-                    params.update(self._extract_params_from_filter(cond))
-        
-        return params
-    
-    def _execute_operation(
+    def _execute_python_operation(
         self,
-        operation: OperationSpec,
-        collection: Collection,
-        params: Dict[str, Any]
+        operation,  # mdbpl.workload.Operation
+        collection: Collection
     ) -> OperationMetrics:
-        """Execute a single operation and collect metrics."""
+        """Execute a Python Benchmark operation and collect metrics."""
         start_time = time.perf_counter()
         
         try:
+            # Wrap collection to capture query info for explain sampling
+            wrapped_collection = ExplainCapturingCollection(collection)
+            
+            # Execute the operation function with wrapped collection
+            result = operation.func(wrapped_collection)
+            
+            end_time = time.perf_counter()
+            latency_ms = (end_time - start_time) * 1000
+            
+            # Get captured query info and optionally run explain (sample 10%)
             docs_examined = None
             docs_returned = None
             index_used = None
             
-            # For find operations, execute the query and optionally get index info
-            if operation.operation == "find":
+            if wrapped_collection.last_query and random.random() < 0.1:
+                # Sample 10% of queries for explain
                 try:
-                    query_filter = self.compiler.compile_filter(operation.filter, params) if operation.filter else {}
-                    projection = operation.projection
+                    query_info = wrapped_collection.last_query
                     
-                    # Execute the actual query to measure latency
-                    cursor = collection.find(query_filter, projection)
-                    if operation.limit:
-                        cursor = cursor.limit(operation.limit)
-                    if operation.sort:
-                        sort_spec = [(field, 1 if order == "asc" else -1) 
-                                    for field, order in operation.sort.items()]
-                        cursor = cursor.sort(sort_spec)
+                    # Build find command
+                    find_cmd = {
+                        'find': collection.name,
+                        'filter': query_info.get('filter', {})
+                    }
+                    if query_info.get('projection'):
+                        find_cmd['projection'] = query_info['projection']
+                    if query_info.get('limit'):
+                        find_cmd['limit'] = query_info['limit']
+                    if query_info.get('sort'):
+                        find_cmd['sort'] = query_info['sort']
                     
-                    # Consume the cursor to actually execute the query
-                    results = list(cursor)
+                    # Run explain
+                    explain_result = collection.database.command('explain', find_cmd, verbosity='allPlansExecution')
                     
-                    end_time = time.perf_counter()
-                    latency_ms = (end_time - start_time) * 1000
-                    
-                    # Will get both docs_returned and docs_examined from explain sampling
-                    # This ensures both metrics are consistently sampled
-                    result_count = len(results)
-                    
-                    docs_returned = None
-                    docs_examined = None
-                    index_used = None
-                    
-                    # Try to get execution stats from explain (sample to reduce overhead)
-                    if random.random() < 0.1:  # Sample 10% of queries
-                        try:
-                            find_cmd = {
-                                'find': collection.name,
-                                'filter': query_filter
-                            }
-                            if projection:
-                                find_cmd['projection'] = projection
-                            if operation.limit:
-                                find_cmd['limit'] = operation.limit
-                            if operation.sort:
-                                sort_spec_dict = dict([(field, 1 if order == "asc" else -1) 
-                                                      for field, order in operation.sort.items()])
-                                find_cmd['sort'] = sort_spec_dict
-                            
-                            explain_result = collection.database.command('explain', find_cmd, verbosity='allPlansExecution')
-                            
-                            if 'executionStats' in explain_result:
-                                stats = explain_result['executionStats']
-                                docs_examined = stats.get('totalDocsExamined', 0)
-                                keys_examined = stats.get('totalKeysExamined', 0)
-                                
-                                # Set docs_returned from actual query result
-                                # This ensures both metrics are sampled together
-                                docs_returned = result_count
-                                
-                                # For index scans, use keys examined if docs examined is 0
-                                if docs_examined == 0 and keys_examined > 0:
-                                    docs_examined = keys_examined
-                                
-                                # Get index info from execution stages
-                                def find_index_scan(stage):
-                                    """Recursively find IXSCAN stage."""
-                                    if not stage:
-                                        return None
-                                    if stage.get('stage') == 'IXSCAN':
-                                        return stage.get('indexName', 'unknown')
-                                    for key in ['inputStage', 'inputStages']:
-                                        if key in stage:
-                                            if isinstance(stage[key], list):
-                                                for substage in stage[key]:
-                                                    idx = find_index_scan(substage)
-                                                    if idx:
-                                                        return idx
-                                            else:
-                                                idx = find_index_scan(stage[key])
-                                                if idx:
-                                                    return idx
-                                    return None
-                                
-                                index_used = find_index_scan(stats.get('executionStages', {}))
-                        except Exception:
-                            # Explain failed, continue with None values
-                            pass
-                    
-                    success = True
-                    
-                except Exception as e:
-                    # Query execution failed
-                    end_time = time.perf_counter()
-                    latency_ms = (end_time - start_time) * 1000
-                    success = False
-                    docs_examined = None
-                    docs_returned = None
-            else:
-                # For non-find operations, just execute normally
-                result = self.compiler.compile_operation(operation, collection, params)
-                end_time = time.perf_counter()
-                latency_ms = (end_time - start_time) * 1000
-                success = True
+                    if 'executionStats' in explain_result:
+                        stats = explain_result['executionStats']
+                        docs_examined = stats.get('totalDocsExamined', 0)
+                        keys_examined = stats.get('totalKeysExamined', 0)
+                        
+                        # Get actual result count from the wrapper
+                        docs_returned = wrapped_collection.last_result_count
+                        
+                        # For index scans, use keys examined if docs examined is 0
+                        if docs_examined == 0 and keys_examined > 0:
+                            docs_examined = keys_examined
+                        
+                        # Get index info from execution stages
+                        def find_index_scan(stage):
+                            if not stage:
+                                return None
+                            if stage.get('stage') == 'IXSCAN':
+                                return stage.get('indexName', 'unknown')
+                            for key in ['inputStage', 'inputStages']:
+                                if key in stage:
+                                    if isinstance(stage[key], list):
+                                        for substage in stage[key]:
+                                            idx = find_index_scan(substage)
+                                            if idx:
+                                                return idx
+                                    else:
+                                        idx = find_index_scan(stage[key])
+                                        if idx:
+                                            return idx
+                            return None
+                        
+                        index_used = find_index_scan(stats.get('executionStages', {}))
+                
+                except Exception:
+                    # Explain failed, continue with None values
+                    pass
             
             return OperationMetrics(
                 operation_name=operation.name,
-                operation_type=operation.operation,
+                operation_type="python",
                 latency_ms=latency_ms,
                 success=True,
                 docs_examined=docs_examined,
                 docs_returned=docs_returned,
                 index_used=index_used
             )
-        
+            
         except Exception as e:
             end_time = time.perf_counter()
             latency_ms = (end_time - start_time) * 1000
             
             return OperationMetrics(
                 operation_name=operation.name,
-                operation_type=operation.operation,
+                operation_type="python",
                 latency_ms=latency_ms,
                 success=False,
                 error=str(e)
@@ -468,12 +367,12 @@ class WorkloadExecutor:
         """
         # Connect to MongoDB
         client = MongoClient(self.mongodb_uri)
-        db = client[self.workload.database]
-        collection = db[self.workload.collection]
+        db = client[self.benchmark.database]
+        collection = db[self.benchmark.collection]
         
         # Initialize results
         result = BenchmarkResult(
-            workload_name=self.workload.name,
+            workload_name=self.benchmark.name,
             duration_seconds=duration_seconds,
             total_operations=0,
             successful_operations=0,
@@ -489,11 +388,8 @@ class WorkloadExecutor:
             # Select operation
             operation = self._select_operation()
             
-            # Generate parameters
-            params = self._generate_parameters(operation)
-            
-            # Execute operation
-            metrics = self._execute_operation(operation, collection, params)
+            # Execute Python operation
+            metrics = self._execute_python_operation(operation, collection)
             
             # Record metrics
             result.total_operations += 1
@@ -509,7 +405,9 @@ class WorkloadExecutor:
         result.duration_seconds = actual_duration
         result.operations_per_second = result.total_operations / actual_duration
         result.calculate_percentiles()
-        result.extrapolate_sampled_metrics()  # Scale up 10% sample to full workload
+        
+        # Extrapolate sampled explain metrics (both DSL and Python workloads sample ~10%)
+        result.extrapolate_sampled_metrics()
         
         # Close connection
         client.close()

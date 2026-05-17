@@ -12,7 +12,6 @@ from concurrent.futures import ThreadPoolExecutor
 
 from mdbpl.demos import list_demos, get_demo
 from mdbpl.frontend.dash_app import create_dash_app
-from mdbpl.dsl.loader import WorkloadLoader
 from mdbpl.executor import WorkloadExecutor, BenchmarkResult
 from mdbpl.storage import BenchmarkStorage
 
@@ -64,31 +63,56 @@ async def health():
 
 
 # ============================================================================
-# Workload Endpoints
+# Workload Endpoints (Deprecated - Python API is now primary)
 # ============================================================================
 
 @app.get("/api/workloads")
 async def get_workloads():
-    """List all available workloads."""
-    workloads = WorkloadLoader.list_builtin_workloads()
-    return {"workloads": workloads}
+    """List all available built-in workloads."""
+    return {
+        "workloads": [
+            "read-heavy",
+            "balanced", 
+            "write-heavy",
+            "range-scan"
+        ]
+    }
 
 
 @app.get("/api/workloads/{workload_name}")
 async def get_workload_info(workload_name: str):
     """Get details about a specific workload."""
-    try:
-        workload = WorkloadLoader.load_builtin(workload_name)
-        return {
-            "name": workload.name,
-            "description": workload.description,
-            "database": workload.database,
-            "collection": workload.collection,
-            "distribution": workload.distribution.type if workload.distribution else "uniform",
-            "operations": len(workload.operations)
+    workload_info = {
+        "read-heavy": {
+            "name": "read-heavy",
+            "description": "95% reads, 5% updates (YCSB Workload B)",
+            "database": "perflab",
+            "collection": "usertable"
+        },
+        "balanced": {
+            "name": "balanced",
+            "description": "50% reads, 50% updates (YCSB Workload A)",
+            "database": "perflab",
+            "collection": "usertable"
+        },
+        "write-heavy": {
+            "name": "write-heavy",
+            "description": "10% reads, 90% updates (YCSB Workload E)",
+            "database": "perflab",
+            "collection": "usertable"
+        },
+        "range-scan": {
+            "name": "range-scan",
+            "description": "80% range queries, 20% point reads",
+            "database": "perflab",
+            "collection": "usertable"
         }
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+    }
+    
+    if workload_name not in workload_info:
+        raise HTTPException(status_code=404, detail=f"Workload '{workload_name}' not found")
+    
+    return workload_info[workload_name]
 
 
 # ============================================================================
@@ -116,33 +140,37 @@ async def get_benchmark_by_tag(tag: str):
     """Get benchmark results by tag."""
     result = storage.get_run_by_tag(tag)
     if not result:
-        raise HTTPException(status_code=404, detail=f"No benchmark found with tag: {tag}")
+        raise HTTPException(status_code=404, detail="Benchmark not found")
     return result
-
-
-@app.get("/api/benchmarks/compare")
-async def compare_benchmarks(baseline: str, optimized: str):
-    """Compare two benchmark runs by their tags."""
-    comparison = storage.compare_runs(baseline, optimized)
-    if not comparison:
-        raise HTTPException(status_code=404, detail="One or both benchmarks not found")
-    return comparison
 
 
 @app.post("/api/benchmarks/run")
 async def run_benchmark(request: RunBenchmarkRequest):
     """
-    Execute a benchmark workload.
+    Run a benchmark workload.
     
     Args:
-        request: Benchmark parameters including workload, duration, and tag
+        request: Benchmark configuration including workload name, duration, etc.
         
     Returns:
-        Complete benchmark results including metrics and operation breakdown
+        Benchmark results with run_id for later retrieval.
     """
     try:
-        # Load workload
-        workload = WorkloadLoader.load_builtin(request.workload_name)
+        # Load Python benchmark
+        if request.workload_name == "read-heavy":
+            from mdbpl import create_read_heavy_benchmark
+            workload = create_read_heavy_benchmark()
+        elif request.workload_name == "balanced":
+            from mdbpl import create_balanced_benchmark
+            workload = create_balanced_benchmark()
+        elif request.workload_name == "write-heavy":
+            from mdbpl import create_write_heavy_benchmark
+            workload = create_write_heavy_benchmark()
+        elif request.workload_name == "range-scan":
+            from mdbpl import create_range_scan_benchmark
+            workload = create_range_scan_benchmark()
+        else:
+            raise HTTPException(status_code=404, detail=f"Workload '{request.workload_name}' not found")
         
         # Create executor
         executor_instance = WorkloadExecutor(
@@ -180,6 +208,8 @@ async def run_benchmark(request: RunBenchmarkRequest):
         
         return result_dict
         
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:

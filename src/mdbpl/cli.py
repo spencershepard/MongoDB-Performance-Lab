@@ -70,29 +70,86 @@ def init(dataset, scale, distribution, fields, field_length, drop):
 
 
 @cli.command()
-@click.option('--workload', required=True, help='Workload name or file path')
+@click.option('--workload', required=True, help='Workload name or Python file path')
 @click.option('--duration', default='30s', help='Benchmark duration')
 @click.option('--tag', default='baseline', help='Tag for this benchmark run')
 def run(workload, duration, tag):
     """Run a benchmark workload."""
-    from mdbpl.dsl import WorkloadLoader
     from mdbpl.executor import WorkloadExecutor, parse_duration
+    import importlib.util
+    import sys
+    from pathlib import Path
     
     click.echo(f"Loading workload: {workload}")
     click.echo()
     
     try:
-        # Load workload (either built-in or from file)
-        if '/' in workload or '\\' in workload or workload.endswith('.yaml'):
-            workload_spec = WorkloadLoader.load_from_file(workload)
-        else:
-            workload_spec = WorkloadLoader.load_builtin(workload)
+        benchmark = None
         
-        click.echo(f"Workload: {workload_spec.name}")
-        click.echo(f"Description: {workload_spec.description}")
-        click.echo(f"Database: {workload_spec.database}")
-        click.echo(f"Collection: {workload_spec.collection}")
-        click.echo(f"Distribution: {workload_spec.distribution.type}")
+        # Check if it's a Python file
+        if workload.endswith('.py'):
+            # Load Python workload from file
+            click.echo("Loading Python workload from file...")
+            
+            workload_path = Path(workload)
+            if not workload_path.exists():
+                click.echo(f"✗ Error: File not found: {workload}", err=True)
+                raise click.Abort()
+            
+            # Load the module dynamically
+            spec = importlib.util.spec_from_file_location("custom_workload", workload_path)
+            module = importlib.util.module_from_spec(spec)
+            sys.modules["custom_workload"] = module
+            spec.loader.exec_module(module)
+            
+            # Look for create_*_benchmark function or a 'benchmark' variable
+            benchmark_func = None
+            for name in dir(module):
+                if name.startswith('create_') and name.endswith('_benchmark'):
+                    benchmark_func = getattr(module, name)
+                    break
+            
+            if benchmark_func:
+                benchmark = benchmark_func()
+            elif hasattr(module, 'benchmark'):
+                benchmark = module.benchmark
+            else:
+                click.echo(f"✗ Error: Python file must define a create_*_benchmark() function or 'benchmark' variable", err=True)
+                raise click.Abort()
+                
+        # Check if it's a built-in workload name
+        elif workload in ['read-heavy', 'balanced', 'write-heavy', 'range-scan']:
+            click.echo(f"Loading built-in workload: {workload}")
+            
+            # Import built-in workload
+            if workload == 'read-heavy':
+                from mdbpl import create_read_heavy_benchmark
+                benchmark = create_read_heavy_benchmark()
+            elif workload == 'balanced':
+                from mdbpl import create_balanced_benchmark
+                benchmark = create_balanced_benchmark()
+            elif workload == 'write-heavy':
+                from mdbpl import create_write_heavy_benchmark
+                benchmark = create_write_heavy_benchmark()
+            elif workload == 'range-scan':
+                from mdbpl import create_range_scan_benchmark
+                benchmark = create_range_scan_benchmark()
+        else:
+            click.echo(f"✗ Error: Unknown workload '{workload}'", err=True)
+            click.echo("Available workloads: read-heavy, balanced, write-heavy, range-scan", err=True)
+            click.echo("Or provide a .py file path with a custom workload", err=True)
+            raise click.Abort()
+        
+        # Display workload info
+        click.echo(f"Workload: {benchmark.name}")
+        click.echo(f"Description: {benchmark.description}")
+        click.echo(f"Database: {benchmark.database}")
+        click.echo(f"Collection: {benchmark.collection}")
+        click.echo(f"Operations: {len(benchmark.operations)}")
+        for op in benchmark.operations:
+            pct = (op.weight / benchmark.get_total_weight()) * 100
+            click.echo(f"  - {op.name}: {op.weight} ({pct:.1f}%)")
+        
         click.echo()
         
         # Get MongoDB connection
@@ -101,8 +158,8 @@ def run(workload, duration, tag):
         # Count records in collection to determine distribution range
         click.echo("Connecting to MongoDB...")
         client = MongoClient(mongodb_uri)
-        db = client[workload_spec.database]
-        collection = db[workload_spec.collection]
+        db = client[benchmark.database]
+        collection = db[benchmark.collection]
         
         record_count = collection.count_documents({})
         
@@ -111,7 +168,7 @@ def run(workload, duration, tag):
             client.close()
             raise click.Abort()
         
-        click.echo(f"Found {record_count:,} records in {workload_spec.collection}")
+        click.echo(f"Found {record_count:,} records in collection")
         click.echo()
         
         # Parse duration
@@ -121,7 +178,7 @@ def run(workload, duration, tag):
         click.echo(f"Starting benchmark (duration: {duration}, tag: {tag})...")
         click.echo()
         
-        executor = WorkloadExecutor(workload_spec, mongodb_uri, record_count)
+        executor = WorkloadExecutor(benchmark, mongodb_uri, record_count)
         
         # Run benchmark
         result = executor.run(duration_seconds, tag)
@@ -393,92 +450,6 @@ def compare(tags):
             f"    p95 latency: {op1['p95_latency']:.2f}ms → {op2['p95_latency']:.2f}ms "
             f"({format_delta(op_deltas['p95_latency'])})"
         )
-
-
-@cli.group()
-def workload():
-    """Manage and inspect workloads."""
-    pass
-
-
-@workload.command('list')
-def workload_list():
-    """List available built-in workloads."""
-    from mdbpl.dsl import WorkloadLoader
-    
-    workloads = WorkloadLoader.list_builtin_workloads()
-    
-    if not workloads:
-        click.echo("No built-in workloads found")
-        return
-    
-    click.echo("Available built-in workloads:")
-    click.echo()
-    for name in sorted(workloads):
-        try:
-            spec = WorkloadLoader.load_builtin(name)
-            click.echo(f"  {name:<20} - {spec.description}")
-        except Exception as e:
-            click.echo(f"  {name:<20} - (error loading: {e})")
-
-
-@workload.command('validate')
-@click.argument('workload_file')
-def workload_validate(workload_file):
-    """Validate a workload YAML file."""
-    from mdbpl.dsl import WorkloadLoader
-    
-    click.echo(f"Validating workload: {workload_file}")
-    
-    try:
-        if '/' in workload_file or '\\' in workload_file or workload_file.endswith('.yaml'):
-            # File path
-            spec = WorkloadLoader.load_from_file(workload_file)
-        else:
-            # Built-in workload name
-            spec = WorkloadLoader.load_builtin(workload_file)
-        
-        click.echo()
-        click.echo(f"✓ Workload is valid")
-        click.echo()
-        click.echo(f"Name: {spec.name}")
-        click.echo(f"Description: {spec.description}")
-        click.echo(f"Database: {spec.database}")
-        click.echo(f"Collection: {spec.collection}")
-        click.echo(f"Distribution: {spec.distribution.type}")
-        click.echo(f"Operations: {len(spec.operations)}")
-        click.echo()
-        
-        for op in spec.operations:
-            click.echo(f"  - {op.name} ({op.operation}, weight: {op.weight}%)")
-            
-    except Exception as e:
-        click.echo(f"✗ Validation failed: {e}", err=True)
-        raise click.Abort()
-
-
-@workload.command('show')
-@click.argument('workload_name')
-def workload_show(workload_name):
-    """Show details of a built-in workload."""
-    from mdbpl.dsl import WorkloadLoader
-    import yaml
-    
-    try:
-        spec = WorkloadLoader.load_builtin(workload_name)
-        
-        click.echo(f"Workload: {spec.name}")
-        click.echo(f"Description: {spec.description}")
-        click.echo()
-        click.echo("YAML Definition:")
-        click.echo("=" * 60)
-        
-        # Convert back to dict and display as YAML
-        click.echo(yaml.dump(spec.model_dump(by_alias=True), default_flow_style=False, sort_keys=False))
-        
-    except Exception as e:
-        click.echo(f"Error loading workload: {e}", err=True)
-        raise click.Abort()
 
 
 @cli.group()

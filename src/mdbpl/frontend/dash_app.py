@@ -21,7 +21,6 @@ import plotly.graph_objects as go
 from dash import Dash, html, dcc, callback, Input, Output, State, no_update, ALL, callback_context
 
 from ..demos import list_demos, get_demo
-from ..dsl.loader import WorkloadLoader
 from ..executor import WorkloadExecutor
 from ..storage import BenchmarkStorage
 import os
@@ -1378,7 +1377,7 @@ def setup_callbacks(app: Dash):
     def load_workloads(_):
         """Load available workloads."""
         try:
-            workloads = WorkloadLoader.list_builtin_workloads()
+            workloads = ["read-heavy", "balanced", "write-heavy", "range-scan"]
             return [{"label": w, "value": w} for w in workloads]
         except Exception as e:
             return [{"label": f"Error: {e}", "value": "error"}]
@@ -1394,10 +1393,15 @@ def setup_callbacks(app: Dash):
             return "", True
         
         try:
-            workload = WorkloadLoader.load_builtin(workload_name)
+            workload_descriptions = {
+                "read-heavy": "95% reads, 5% updates (YCSB Workload B)",
+                "balanced": "50% reads, 50% updates (YCSB Workload A)",
+                "write-heavy": "10% reads, 90% updates (YCSB Workload E)",
+                "range-scan": "80% range queries, 20% point reads"
+            }
             description = html.Div([
-                html.P(workload.description or "No description available"),
-                html.P(f"Distribution: {workload.distribution.type if workload.distribution else 'uniform'}", 
+                html.P(workload_descriptions.get(workload_name, "No description available")),
+                html.P(f"Distribution: zipfian", 
                        style={"fontSize": "14px", "color": "#64748b"})
             ], className="demo-description")
             return description, False
@@ -1423,8 +1427,21 @@ def setup_callbacks(app: Dash):
             return no_update, no_update, no_update
         
         try:
-            # Load workload
-            workload = WorkloadLoader.load_builtin(workload_name)
+            # Load Python benchmark
+            if workload_name == "read-heavy":
+                from mdbpl import create_read_heavy_benchmark
+                workload = create_read_heavy_benchmark()
+            elif workload_name == "balanced":
+                from mdbpl import create_balanced_benchmark
+                workload = create_balanced_benchmark()
+            elif workload_name == "write-heavy":
+                from mdbpl import create_write_heavy_benchmark
+                workload = create_write_heavy_benchmark()
+            elif workload_name == "range-scan":
+                from mdbpl import create_range_scan_benchmark
+                workload = create_range_scan_benchmark()
+            else:
+                raise ValueError(f"Unknown workload: {workload_name}")
             
             # Create executor
             executor_instance = WorkloadExecutor(

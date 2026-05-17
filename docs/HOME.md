@@ -4,10 +4,7 @@ Benchmark MongoDB queries and compare performance across different configuration
 
 ## Interactive Demos
 
-Pre-built scenarios that demonstrate common MongoDB performance patterns:
-
-- **Index Performance** - See the impact of proper indexing on range queries and scans
-- **Over-Indexing** - Understand the write performance penalties of too many indexes
+Pre-built scenarios that demonstrate common MongoDB performance patterns.
 
 Select a demo from the dropdown, click **Run**, and watch real-time execution progress. Each demo automatically saves results for comparison.
 

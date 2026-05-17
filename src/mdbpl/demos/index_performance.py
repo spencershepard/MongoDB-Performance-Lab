@@ -6,7 +6,7 @@ import os
 
 from .base import Demo, DemoStep, DemoResult
 from ..ycsb import load_ycsb_data
-from ..dsl.loader import WorkloadLoader
+from ..workloads import create_range_scan_benchmark
 from ..executor import WorkloadExecutor
 from ..storage import BenchmarkStorage
 
@@ -75,9 +75,10 @@ class IndexPerformanceDemo(Demo):
             # Drop any existing indexes (except _id) to ensure clean baseline
             self.collection.drop_indexes()
             
-            workload_spec = WorkloadLoader.load_builtin("range-scan")
+            # Create Python benchmark using range-scan workload
+            benchmark = create_range_scan_benchmark(record_count=10000)
             executor = WorkloadExecutor(
-                workload=workload_spec,
+                workload=benchmark,
                 mongodb_uri=self.mongodb_uri,
                 record_count=10000
             )

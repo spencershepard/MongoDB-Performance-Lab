@@ -36,7 +36,7 @@ mdbpl snapshot analyze --interactive
 ```
 
 This generates:
-- Workload DSL YAML file
+- Python workload file
 - Query frequency distribution
 - Parameter patterns
 
@@ -44,76 +44,73 @@ This generates:
 
 ```bash
 # Run snapshot workload
-mdbpl run --workload snapshots/production-replica.yaml --duration 5m
+mdbpl run --workload snapshots/production_replica.py --duration 5m
 
 # Compare with optimizations
-mdbpl run --workload snapshots/production-replica.yaml --tag "with-indexes"
+mdbpl run --workload snapshots/production_replica.py --tag "with-indexes"
 mdbpl compare --tags baseline,with-indexes
 ```
 
-## DSL Support for Snapshot Mode
+## Python API for Snapshot Mode
 
-### ✅ Already Supported
+### ✅ Current Support
 
 **1. Arbitrary Schemas**
-```yaml
-database: "production_db"
-collection: "users"  # Any collection name
+```python
+benchmark = Benchmark(
+    name="production-workload",
+    database="production_db",
+    collection="users"  # Any collection name
+)
 ```
 
 **2. Complex Filters**
-```yaml
-filter:
-  and:
-    - field: "profile.country"
-      operator: "eq"
-      value: { type: "param", param: "country" }
-    - field: "lastLogin"
-      operator: "gte"
-      value: { type: "param", param: "dateThreshold" }
+```python
+@benchmark.operation(weight=40, name="active_users_by_country")
+def find_active_users(collection):
+    return list(collection.find({
+        "profile.country": country,
+        "lastLogin": {"$gte": date_threshold}
+    }).limit(20))
 ```
 
 **3. Array Queries**
-```yaml
-filter:
-  field: "tags"
-  operator: "all"
-  value: { type: "param", param: "requiredTags" }
+```python
+@benchmark.operation(weight=20, name="tagged_items")
+def find_by_tags(collection):
+    return list(collection.find({
+        "tags": {"$all": required_tags}
+    }))
 ```
 
 **4. Embedded Document Paths**
-```yaml
-filter:
-  field: "address.zipCode"
-  operator: "in"
-  value: { type: "literal", value: ["10001", "10002"] }
+```python
+@benchmark.operation(weight=30, name="by_zipcode")
+def find_by_zip(collection):
+    return list(collection.find({
+        "address.zipCode": {"$in": ["10001", "10002"]}
+    }))
 ```
 
 **5. Aggregation Pipelines**
-```yaml
-operation: "aggregate"
-pipeline:
-  - $match: { status: "active" }
-  - $lookup:
-      from: "orders"
-      localField: "userId"
-      foreignField: "customerId"
-      as: "orders"
-  - $unwind: "$orders"
-  - $group:
-      _id: "$userId"
-      totalSpent: { $sum: "$orders.total" }
+```python
+@benchmark.operation(weight=10, name="user_order_totals")
+def aggregate_orders(collection):
+    return list(collection.aggregate([
+        {"$match": {"status": "active"}},
+        {"$lookup": {
+            "from": "orders",
+            "localField": "userId",
+            "foreignField": "customerId",
+            "as": "orders"
+        }},
+        {"$unwind": "$orders"},
+        {"$group": {
+            "_id": "$userId",
+            "totalSpent": {"$sum": "$orders.total"}
+        }}
+    ]))
 ```
-
-### 🔧 Enhanced Features
-
-We've added operators for production queries:
-- `exists` - Check field existence
-- `type` - Type checking
-- `all` - Array contains all values
-- `elemMatch` - Complex array element matching
-- `size` - Array length
-- `nin` - Not in array
 
 ### 📋 Future Enhancements
 
@@ -127,13 +124,13 @@ mdbpl snapshot infer-schema --collection users
 ```bash
 mdbpl snapshot generate-workload --from-profiler
 # Analyzes slow query log
-# Generates DSL workload automatically
+# Generates Python workload automatically
 ```
 
 **3. LLM-Assisted Workload Creation** (Future)
 ```bash
 mdbpl snapshot generate-workload --llm --description "User login flow"
-# Uses LLM to generate realistic workload from description
+# Uses LLM to generate realistic Python workload from description
 ```
 
 ## Example: E-commerce Snapshot Workflow
@@ -149,24 +146,38 @@ mdbpl snapshot import \
 ```
 
 ### Step 2: Create Workload
-See `workloads/examples/ecommerce-snapshot.yaml` for full example:
+See `examples/ecommerce_snapshot.py` for full example:
 
-```yaml
-name: "ecommerce-snapshot"
-database: "ecommerce"
-collection: "orders"
+```python
+from mdbpl import Benchmark, uniform
 
-operations:
-  - name: "get-user-orders"
-    weight: 40
-    operation: "find"
-    filter:
-      field: "userId"
-      operator: "eq"
-      value: { type: "param", param: "userId" }
-    sort:
-      createdAt: -1
-    limit: 10
+benchmark = Benchmark(
+    name="ecommerce-snapshot",
+    database="ecommerce",
+    collection="orders"
+)
+
+user_dist = uniform(100000)
+
+@benchmark.operation(weight=40, name="get_user_orders")
+def get_user_orders(collection):
+    user_id = user_dist.next()
+    return list(collection.find(
+        {"userId": user_id}
+    ).sort("createdAt", -1).limit(10))
+
+@benchmark.operation(weight=30, name="find_by_status")
+def find_pending(collection):
+    return list(collection.find(
+        {"status": "pending"}
+    ).limit(20))
+
+@benchmark.operation(weight=30, name="find_by_product")
+def find_by_product(collection):
+    product_id = user_dist.next()
+    return list(collection.find(
+        {"items.productId": product_id}
+    ).limit(10))
 ```
 
 ### Step 3: Baseline Benchmark
@@ -187,14 +198,15 @@ mdbpl run --workload ecommerce-snapshot --tag optimized
 mdbpl compare --tags baseline,optimized
 ```
 
-## Benefits of DSL for Snapshot Mode
+## Benefits of Python API for Snapshot Mode
 
 1. **Reproducible**: Same workload runs identically across environments
 2. **Shareable**: Check workload definitions into Git
 3. **Versionable**: Track workload changes over time
-4. **Analyzable**: Parse DSL to analyze query patterns
-5. **Portable**: Could run against other databases (future)
+4. **Flexible**: Full pymongo API, any MongoDB operation
+5. **Type-safe**: IDE autocomplete and error checking
 6. **CI/CD Ready**: Automated regression testing
+7. **Familiar**: Standard Python, no new syntax to learn
 
 ## Snapshot vs YCSB Mode
 
@@ -223,15 +235,16 @@ mdbpl snapshot import \
 
 ## Conclusion
 
-The DSL is **snapshot-ready**. Key capabilities:
+The Python Benchmark API is **snapshot-ready**. Key capabilities:
 - ✅ Flexible schema support
 - ✅ Complex query patterns
 - ✅ Array and embedded document queries
 - ✅ Aggregation pipelines
 - ✅ Reproducible workload definitions
+- ✅ Full pymongo API access
 
 Next implementation phases:
 1. Snapshot import tooling
 2. Schema inference
-3. Workload auto-generation
-4. LLM integration
+3. Workload auto-generation from profiler logs
+4. LLM integration for workload generation

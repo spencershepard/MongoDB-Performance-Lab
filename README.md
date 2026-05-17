@@ -19,19 +19,19 @@ An interactive MongoDB performance experimentation platform designed for learnin
 
 **For DBAs Optimizing Production:**
 - 📸 Snapshot mode: Import production data and replay workloads
-- 🔄 Reproducible benchmarks via declarative DSL
+- 🔄 Reproducible benchmarks via Python API
 - 🚀 CI/CD integration for performance regression testing
 - 📈 Historical trend analysis across schema iterations
 
 **vs. Traditional Tools:**
-- **vs. YCSB**: Easier to use, MongoDB-focused, visual comparison, DSL abstraction
+- **vs. YCSB**: Easier to use, MongoDB-focused, visual comparison, Python API
 - **vs. MongoDB Atlas Performance Advisor**: Works locally, synthetic workloads, proactive testing
 - **vs. Custom Scripts**: Standardized metrics, reproducible, shareable benchmarks
 
 ### Core Features
 
 - ⚡ **YCSB-powered data generation** with realistic distributions
-- 📝 **Workload DSL** for defining queries independent of MongoDB syntax
+- � **Python Benchmark API** for defining workloads with simple decorators
 - 🎯 **Benchmark runner** with detailed performance metrics (p50/p95/p99, docs scanned, index usage)
 - 🔄 **Compare mode** to visualize optimization impact
 - 🌐 **Web UI** with interactive charts and one-click demos (Plotly Dash)
@@ -148,11 +148,13 @@ db.usertable.updateMany({}, {
 })
 ```
 
-**Query Optimization** - Modify your workload DSL
-```yaml
+**Query Optimization** - Modify your Python workload
+```python
 # Use projection to limit fields returned
+collection.find({"field0": value}, {"field0": 1, "field1": 1})
+
 # Use covered queries (query + projection only use indexed fields)
-# Adjust sort orders
+# Adjust sort orders with .sort()
 # Add filters to reduce result sets
 ```
 
@@ -202,7 +204,7 @@ Latency p95 (ms)          5.20            0.43            -91.71%         ✓ (i
 ### Next Steps
 
 - Explore [built-in workloads](#workloads-mvp)
-- Create [custom workloads](#query-dsl-example)
+- Create [custom workloads](#python-workload-api)
 - Set up [CI/CD integration](#cli-mode-cicd-integration)
 - Read [MongoDB Performance Best Practices](https://www.mongodb.com/docs/manual/administration/analyzing-mongodb-performance/)
 - Learn about [Query Optimization](https://www.mongodb.com/docs/manual/core/query-optimization/)
@@ -232,11 +234,11 @@ Latency p95 (ms)          5.20            0.43            -91.71%         ✓ (i
 
 Three layers:
 
-1. Dataset Layer
-2. Workload Layer
-3. DSL Layer (query abstraction)
+1. Dataset Layer (YCSB data generation)
+2. Workload Layer (Python API with decorators)
+3. Execution Layer (metrics collection and analysis)
 
-All workloads are defined via a structured DSL rather than raw MongoDB queries.
+All workloads are defined via Python functions using the Benchmark API.
 
 ---
 
@@ -264,7 +266,7 @@ YCSB-style documents:
 - `mdbpl init` wraps YCSB for easy setup
 
 **Workload Execution:**
-- Custom DSL-based workload runner (not YCSB's execution engine)
+- Custom Python-based workload runner (not YCSB's execution engine)
 - Full control over metrics, explain plans, and query patterns
 - Extensible beyond YCSB's standard workloads
 
@@ -275,79 +277,93 @@ YCSB-style documents:
 **Built-in Workloads:**
 - `read-heavy`: 95% reads, 5% updates (YCSB Workload B)
 - `balanced`: 50% reads, 50% updates (YCSB Workload A)
-- `range-scan`: Range queries with sorting
-- `compound-index-test`: Multi-field query patterns
+- `write-heavy`: 10% reads, 90% updates (YCSB Workload E)
+- `range-scan`: Range queries with sorting on indexed fields
 
-All workloads use the declarative YAML DSL for reproducibility.
+All workloads are implemented using the Python Benchmark API for flexibility and ease of customization.
 
 ---
 
-## Workload DSL
+## Python Workload API
 
-Workloads are defined in YAML for readability and reproducibility:
+Workloads are defined using Python decorators for maximum flexibility:
 
-```yaml
-name: "read-heavy"
-description: "95% reads, 5% updates with zipfian distribution"
-database: "perflab"
-collection: "usertable"
+```python
+from mdbpl import Benchmark, zipfian
 
-distribution:
-  type: "zipfian"  # 80/20 access pattern
+# Create a benchmark
+benchmark = Benchmark(
+    name="read-heavy",
+    database="perflab",
+    collection="usertable",
+    description="95% reads, 5% updates with zipfian distribution"
+)
 
-operations:
-  - name: "read"
-    weight: 95
-    operation: "find"
-    filter:
-      field: "_id"
-      operator: "eq"
-      value:
-        type: "param"
-        param: "userId"
-    projection:
-      field0: 1
-      field1: 1
-    limit: 1
+# Setup distribution (80/20 access pattern)
+dist = zipfian(record_count=10000)
 
-  - name: "update"
-    weight: 5
-    operation: "update"
-    filter:
-      field: "_id"
-      operator: "eq"
-      value:
-        type: "param"
-        param: "userId"
-    update:
-      $set:
-        field0:
-          type: "random"
-          length: 100
+# Define operations with weights
+@benchmark.operation(weight=95, name="point_read")
+def point_read(collection):
+    doc_id = f"user{dist.next():010d}"
+    return collection.find_one(
+        {"_id": doc_id},
+        {"field0": 1, "field1": 1, "field2": 1}
+    )
+
+@benchmark.operation(weight=5, name="update_field")
+def update_field(collection):
+    doc_id = f"user{dist.next():010d}"
+    return collection.update_one(
+        {"_id": doc_id},
+        {"$set": {"field0": "x" * 100}}
+    )
 ```
 
-**Supported Operations:**
-- `find` - Point queries, range scans, compound filters
-- `update` - Single and bulk updates
-- `insert` - Document insertion
-- `delete` - Document deletion
-- `aggregate` - Aggregation pipelines
+**Key Features:**
+- **Decorator-based**: `@benchmark.operation(weight=N, name="...")` 
+- **Weighted operations**: Weights don't need to sum to 100
+- **Full pymongo API**: Use any MongoDB query, update, aggregation
+- **Distribution generators**: `zipfian()`, `uniform()`, `latest()`
+- **Built-in workloads**: `create_read_heavy_benchmark()`, `create_balanced_benchmark()`, etc.
 
-**Supported Filters:**
-- Simple: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`, `nin`, `regex`
-- Array: `all`, `elemMatch`, `size`
-- Field: `exists`, `type`
-- Compound: `and`, `or` with nested conditions
+**Example: Custom E-commerce Workload**
 
-**Snapshot Mode Ready**: The DSL is fully designed to handle production schemas and query patterns. Import real data, define workloads matching your production queries, and benchmark optimizations in isolation. See [Snapshot Mode Guide](docs/SNAPSHOT-MODE.md).
+```python
+from mdbpl import Benchmark, uniform
 
-See [DSL Specification](docs/DSL-SPEC.md) for complete reference.
+benchmark = Benchmark(
+    name="ecommerce-orders",
+    database="ecommerce",
+    collection="orders"
+)
+
+dist = uniform(100000)
+
+@benchmark.operation(weight=70, name="lookup_by_id")
+def lookup_order(collection):
+    order_id = dist.next()
+    return collection.find_one({"order_id": order_id})
+
+@benchmark.operation(weight=20, name="find_by_status")
+def find_pending(collection):
+    return list(collection.find({"status": "pending"}).limit(10))
+
+@benchmark.operation(weight=10, name="aggregate_totals")
+def daily_totals(collection):
+    return list(collection.aggregate([
+        {"$match": {"date": "2024-01-15"}},
+        {"$group": {"_id": "$status", "total": {"$sum": "$amount"}}}
+    ]))
+```
+
+See [examples/custom_benchmark.py](examples/custom_benchmark.py) for a complete working example.
 
 ---
 
 ## Execution Flow
 
-DSL → Compiler → MongoDB → Metrics → UI
+Python Workload → Benchmark Runner → MongoDB → Metrics → Storage/UI
 
 ---
 
@@ -412,7 +428,7 @@ For in-depth explanations of metrics collection, troubleshooting, and interpreta
 
 ## Architecture
 
-Frontend → API → Benchmark Engine → DSL Compiler → MongoDB
+Frontend → API → Benchmark Engine → Python Workloads → MongoDB
 
 ### Tech Stack
 
@@ -455,14 +471,18 @@ Frontend → API → Benchmark Engine → DSL Compiler → MongoDB
 Run benchmarks from command line or CI/CD pipelines:
 
 ```bash
-# Run a single workload
-mdbpl run --workload read-heavy --dataset ycsb-1M
+# Run a built-in workload
+mdbpl run --workload read-heavy --duration 30s
+
+# Run a custom Python workload
+mdbpl run --workload custom_benchmark.py --duration 30s
 
 # Compare against baseline
-mdbpl run --workload custom.yaml --baseline main --threshold 10%
+mdbpl run --workload read-heavy --tag optimized --duration 30s
+mdbpl compare --tags baseline,optimized
 
 # Generate report
-mdbpl report --format json --output results.json
+mdbpl report --last
 ```
 
 **Use Cases:**
@@ -535,12 +555,12 @@ thresholds:
 
 ## Key Idea
 
-All workloads are defined in a DSL, not raw queries.
-
-This enables:
-- reproducibility
-- extensibility
-- safe automation
+All workloads are defined using Python functions, giving you:
+- **Full flexibility**: Use any pymongo operation
+- **Reproducibility**: Version control your benchmarks
+- **Extensibility**: Easy to add custom logic
+- **Type safety**: IDE autocomplete and type checking
+- **Familiarity**: Standard Python, no new syntax to learn
 
 ---
 
