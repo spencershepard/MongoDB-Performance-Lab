@@ -67,34 +67,16 @@ Open your browser to explore performance demos visually:
 
 **http://localhost:8888/ui/**
 
-Or use the convenient redirect:
-
-**http://localhost:8888/dashboard**
 
 The Web UI provides:
 - 🎯 **Demo selector** - Choose from available performance demonstrations
 - ▶️ **One-click execution** - Run demos with a button click
-- 📊 **Live charts** - Interactive Plotly visualizations of throughput and latency
 - 📈 **Detailed metrics** - Before/after comparison tables with improvement percentages
 - ⏱️ **Execution timeline** - Step-by-step progress with timing information
 
 The Web UI is built with Plotly Dash for rapid development, but the REST API (`/api/*`) is designed to support any frontend framework. The same API powers both the CLI and web interface, making it easy to switch to React/Next.js in the future.
 
 
-**Run your first benchmark**
-
-```bash
-# Initialize with sample dataset
-docker-compose exec perflab mdbpl init --scale 10k --drop
-
-# Run a read-heavy workload
-docker-compose exec perflab mdbpl run --workload read-heavy --duration 30s --tag baseline
-
-# View results
-docker-compose exec perflab mdbpl report --last
-
-# List all benchmark runs
-docker-compose exec perflab mdbpl report --list
 ```
 
 **Init options:**
@@ -104,7 +86,13 @@ docker-compose exec perflab mdbpl report --list
 - `--field-length`: Length of each field value (default: 100)
 - `--drop`: Drop existing collection before loading (recommended)
 
-3. **Experiment and optimize**
+Initialize a sample dataset:
+
+```bash
+docker-compose exec perflab mdbpl init --scale 100k --distribution zipfian --drop
+```
+
+**Experiment and optimize**
 
 Use MongoDB tools to experiment with performance optimizations:
 
@@ -123,16 +111,18 @@ use perflab
 
 **Indexes** - Most common optimization
 ```bash
-# Using the built-in index commands (recommended for beginners)
-docker-compose exec perflab mdbpl index create field0
-docker-compose exec perflab mdbpl index create "field0,field1"  # compound
-docker-compose exec perflab mdbpl index list
-docker-compose exec perflab mdbpl index drop field0_1
-
-# Or use mongosh directly (advanced)
+# Use mongosh to manage indexes
 docker-compose exec mongodb mongosh perflab --eval "db.usertable.createIndex({field0: 1})"
+docker-compose exec mongodb mongosh perflab --eval "db.usertable.createIndex({field0: 1, field1: 1})"  # compound
 docker-compose exec mongodb mongosh perflab --eval "db.usertable.getIndexes()"
 docker-compose exec mongodb mongosh perflab --eval "db.usertable.dropIndex('field0_1')"
+
+# Or use interactive mongosh shell
+docker-compose exec mongodb mongosh perflab
+# Then inside mongosh:
+# > db.usertable.createIndex({field0: 1})
+# > db.usertable.getIndexes()
+# > db.usertable.dropIndex('field0_1')
 ```
 
 **Schema Design** - Restructure your data
@@ -179,7 +169,7 @@ The recommended workflow for performance experimentation:
 1. **Load baseline data** → `mdbpl init --scale 10k --drop`
 2. **Run baseline benchmark** → `mdbpl run --workload range-scan --tag no-index`
 3. **Analyze results** → Review metrics (156 ops/sec, 3.83ms avg latency)
-4. **Make a change** → `mdbpl index create field0`
+4. **Make a change** → `docker-compose exec mongodb mongosh perflab --eval "db.usertable.createIndex({field0: 1})"`
 5. **Re-benchmark** → `mdbpl run --workload range-scan --tag with-index`
 6. **Compare results** → `mdbpl compare --tags no-index,with-index`
    - **Result**: +861% throughput, -92% latency! 🎉
