@@ -131,21 +131,11 @@ class CommandExecutor:
         """Execute a mongosh script and return result."""
         if self.verbose:
             print(f"  [mongosh] Executing script...")
-            print(f"DEBUG: Script length: {len(script)} chars")
-            print(f"DEBUG: First 200 chars: {repr(script[:200])}")
         
         # Write script to temporary file
         with tempfile.NamedTemporaryFile(mode='w', suffix='.js', delete=False, encoding='utf-8') as f:
             f.write(script)
             script_path = f.name
-        
-        # Verify file was written
-        if self.verbose:
-            with open(script_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-                print(f"DEBUG: File written: {script_path}")
-                print(f"DEBUG: File size: {len(content)} chars")
-                print(f"DEBUG: File matches script: {content == script}")
         
         try:
             # Ensure URI includes database name for scripts to work properly
@@ -168,12 +158,6 @@ class CommandExecutor:
                 timeout=60
             )
             
-            # DEBUG: Log raw output
-            print(f"DEBUG: mongosh exit code: {result.returncode}")
-            print(f"DEBUG: mongosh stdout length: {len(result.stdout)} bytes")
-            print(f"DEBUG: mongosh stdout repr: {repr(result.stdout[:200])}...")
-            print(f"DEBUG: mongosh stderr length: {len(result.stderr)} bytes")
-            
             output = {
                 "exit_code": result.returncode,
                 "stdout": result.stdout,
@@ -185,10 +169,6 @@ class CommandExecutor:
                 print(result.stdout)
             if result.returncode != 0 and result.stderr:
                 print(f"  Error: {result.stderr}")
-            
-            # Keep temp file for debugging
-            if self.verbose:
-                print(f"DEBUG: Temp script kept at: {script_path}")
             
             return output
         
@@ -214,12 +194,10 @@ class CommandExecutor:
                 "success": False
             }
         finally:
-            # Keep temp file for debugging - don't delete it
-            # try:
-            #     os.unlink(script_path)
-            # except:
-            #     pass
-            pass
+            try:
+                os.unlink(script_path)
+            except:
+                pass
     
     def execute_command(self, command: Command) -> dict:
         """Execute a command and return result."""

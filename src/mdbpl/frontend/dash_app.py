@@ -1195,6 +1195,20 @@ def create_dash_app(requests_pathname_prefix: str = "/") -> Dash:
                     overflow-y: auto;
                 }
                 
+                .command-preview {
+                    background: #f8fafc;
+                    color: #475569;
+                    padding: 16px;
+                    font-family: 'Consolas', 'Monaco', monospace;
+                    font-size: 13px;
+                    line-height: 1.6;
+                    overflow-x: auto;
+                    white-space: pre-wrap;
+                    word-wrap: break-word;
+                    border: 1px solid #e2e8f0;
+                    border-radius: 6px;
+                }
+                
                 .command-output.collapsed {
                     max-height: 60px;
                     overflow: hidden;
@@ -1634,41 +1648,74 @@ def setup_callbacks(app: Dash):
                     ])
                 ], open=(idx == 0), className="step-markdown-section")
                 
-                # Commands list
-                command_items = []
+                # Pre-render command boxes showing what will be executed
+                command_boxes = []
                 for cmd_idx, cmd in enumerate(step.commands):
                     cmd_text = cmd.raw if hasattr(cmd, 'raw') else str(cmd)
                     cmd_type = cmd.type if hasattr(cmd, 'type') else 'shell'
-                    collapse_note = html.Span("(output collapsed)", className="collapse-note") if cmd.collapse_output else ""
+                    is_collapsed = cmd.collapse_output if hasattr(cmd, 'collapse_output') else False
                     
-                    # Add type badge
+                    # Show command type badge
                     if cmd_type == "mongosh":
-                        type_icon = html.Span("🍃 mongosh: ", style={
-                            "color": "#00684a",
-                            "fontWeight": "700",
+                        type_badge = html.Span([
+                            html.Span("🍃 ", style={"marginRight": "4px"}),
+                            "mongosh"
+                        ], style={
+                            "display": "inline-block",
+                            "padding": "2px 8px",
+                            "background": "#00684a",
+                            "color": "white",
+                            "borderRadius": "4px",
                             "fontSize": "11px",
-                            "textTransform": "uppercase"
+                            "fontWeight": "600",
+                            "marginRight": "8px",
+                            "textTransform": "uppercase",
+                            "letterSpacing": "0.05em"
                         })
+                        cmd_display = f"$ mongosh\\n{cmd_text}"
                     else:
-                        type_icon = html.Span("⚡ shell: ", style={
-                            "color": "#3b82f6",
-                            "fontWeight": "700",
+                        type_badge = html.Span([
+                            html.Span("⚡ ", style={"marginRight": "4px"}),
+                            "shell"
+                        ], style={
+                            "display": "inline-block",
+                            "padding": "2px 8px",
+                            "background": "#3b82f6",
+                            "color": "white",
+                            "borderRadius": "4px",
                             "fontSize": "11px",
-                            "textTransform": "uppercase"
+                            "fontWeight": "600",
+                            "marginRight": "8px",
+                            "textTransform": "uppercase",
+                            "letterSpacing": "0.05em"
                         })
+                        cmd_display = f"$ {cmd_text}"
                     
-                    command_items.append(
-                        html.Li([
-                            type_icon,
-                            html.Code(cmd_text),
-                            collapse_note
-                        ])
+                    # Build command preview box
+                    if is_collapsed:
+                        preview_content = html.Details([
+                            html.Summary("Click to expand command"),
+                            html.Pre(cmd_display, className="command-preview")
+                        ], open=False)
+                    else:
+                        preview_content = html.Pre(cmd_display, className="command-preview")
+                    
+                    command_boxes.append(
+                        html.Div([
+                            html.Div([
+                                type_badge,
+                                html.Span("⏳ Ready to execute", style={
+                                    "color": "#64748b",
+                                    "fontSize": "12px",
+                                    "fontStyle": "italic"
+                                })
+                            ], style={"marginBottom": "8px"}),
+                            preview_content
+                        ], style={"marginBottom": "16px"})
                     )
                 
-                commands_section = html.Div([
-                    html.H5("Commands to execute:"),
-                    html.Ul(command_items)
-                ], className="step-commands")
+                commands_section = html.Div(command_boxes, className="step-commands", 
+                                          id={"type": "step-commands", "index": idx})
                 
                 # Execute button
                 execute_btn = html.Button(
@@ -1679,10 +1726,11 @@ def setup_callbacks(app: Dash):
                     className="execute-step-button"
                 )
                 
-                # Output area (initially empty)
+                # Output area (will be populated by callback after execution)
                 output_area = html.Div(
                     id={"type": "step-output", "index": idx},
-                    className="step-output"
+                    className="step-output",
+                    style={"display": "none"}  # Hidden until execution completes
                 )
                 
                 # Build step card
@@ -1696,9 +1744,9 @@ def setup_callbacks(app: Dash):
                     ], className="step-header"),
                     html.P(step.description, style={"color": "#64748b", "marginBottom": "16px"}),
                     markdown_section,
-                    commands_section,
                     execute_btn,
-                    output_area
+                    commands_section,  # Commands shown before execution
+                    output_area  # Output shown after execution
                 ], className=f"step-card {'step-current' if idx == 0 else 'step-locked'}", 
                    id={"type": "step-card", "index": idx})
                 
@@ -1783,6 +1831,8 @@ def setup_callbacks(app: Dash):
     
     @app.callback(
         [Output({"type": "step-output", "index": MATCH}, "children"),
+         Output({"type": "step-output", "index": MATCH}, "style"),
+         Output({"type": "step-commands", "index": MATCH}, "style"),
          Output({"type": "step-card", "index": MATCH}, "className"),
          Output({"type": "step-badge", "index": MATCH}, "children"),
          Output({"type": "step-badge", "index": MATCH}, "className"),
@@ -1803,23 +1853,23 @@ def setup_callbacks(app: Dash):
         
         # Only update if this step is currently running
         if not exec_state or exec_state.get("running_step") != step_index:
-            return no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update
+            return no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update
         
         demo_name = exec_state.get("demo_name")
         if not demo_name:
-            return no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update
+            return no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update
         
         step_key = f"step_{demo_name}_{step_index}"
         
         # Check if step has completed
         if step_key not in _demo_execution_state:
             # Still running - don't update UI yet
-            return no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update
+            return no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update
         
         step_result = _demo_execution_state.pop(step_key)  # Remove from global state
         
         if not step_result.get("completed"):
-            return no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update
+            return no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update
         
         # Build output display
         output_components = []
@@ -1938,6 +1988,8 @@ def setup_callbacks(app: Dash):
         
         return (
             output_components,
+            {"display": "block"},  # Show output area
+            {"display": "none"},   # Hide command preview
             card_class,
             badge_text,
             badge_class,
