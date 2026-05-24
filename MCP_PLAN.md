@@ -4,6 +4,8 @@
 
 This document outlines the design and implementation plan for the MongoDB Performance Lab MCP (Model Context Protocol) server. The MCP server enables VS Code agents to generate and execute performance testing workflows based on user's application code.
 
+**Key Innovation:** Workflows use the same Demo class format as the built-in demos, ensuring proven patterns and zero learning curve for LLM code generation.
+
 ## Architecture
 
 ```
@@ -12,7 +14,7 @@ This document outlines the design and implementation plan for the MongoDB Perfor
 │  ─────────────────────────────────────────────────────────  │
 │  • Has full workspace access                                │
 │  • Reads and analyzes user's code directly                  │
-│  • Generates Python workflows based on analysis             │
+│  • Generates Demo subclass workflows based on examples      │
 │  • Orchestrates the performance testing flow                │
 └────────────────────────┬────────────────────────────────────┘
                          │
@@ -22,10 +24,10 @@ This document outlines the design and implementation plan for the MongoDB Perfor
 │  ─────────────────────────────────────────────────────────  │
 │  Provides:                                                   │
 │  • Analysis guidance (how to find queries)                  │
-│  • Workflow templates (example code structure)              │
+│  • Demo examples (working index_performance.py, etc.)       │
 │  • Best practices (indexing strategies)                     │
 │  • Schema introspection (current indexes, stats)            │
-│  • Workflow execution (isolated container)                  │
+│  • Demo execution (runs LLM-generated Demo classes)         │
 │                                                              │
 │  Does NOT:                                                   │
 │  • Analyze user's code (agent does this)                    │
@@ -39,7 +41,7 @@ This document outlines the design and implementation plan for the MongoDB Perfor
 │  ─────────────────────────────────────────────────────────  │
 │  • Agent-controlled connection URI                          │
 │  • Test database only (not production)                      │
-│  • MCP executes workflows against this                      │
+│  • MCP executes Demo workflows against this                 │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -47,25 +49,26 @@ This document outlines the design and implementation plan for the MongoDB Perfor
 
 ### 1. **Agent-Driven Analysis**
 - Agent has workspace access and reads user's code directly
-- MCP provides **guidance**, not code analysis
+- MCP provides **guidance** and **examples**, not code analysis
 - Agent is responsible for finding queries, understanding context
 
 ### 2. **Secure Execution**
 - Workflows execute in isolated Docker container
 - No arbitrary file system access
-- Agent-generated Python code runs in sandbox
+- Agent-generated Demo classes run in sandbox
 - Only benchmark results returned to agent
 
-### 3. **Knowledge Provider**
-- MCP provides templates, patterns, best practices
-- Agent uses these to guide workflow generation
-- Separation of knowledge (MCP) from analysis (agent)
+### 3. **Proven Patterns**
+- Workflows use same Demo class format as built-in demos
+- LLM learns from working examples (index_performance.py)
+- Reuses all existing infrastructure (ShellCommand, MongoshCommand, executor)
+- If it works in UI, it works via MCP
 
-### 4. **Flexible Workflow Generation**
-- Agent generates full Python workflows
-- Python allows complex scenarios (loops, conditionals, realistic data)
-- LLM excels at Python generation
-- No DSL constraints
+### 4. **Structured Code Generation**
+- Agent generates Demo subclasses (highly structured)
+- Clear patterns: baseline → optimization → comparison
+- Rich inline documentation guides LLM
+- Type-safe Python classes with validation
 
 ## MCP Tools
 
@@ -126,98 +129,83 @@ This document outlines the design and implementation plan for the MongoDB Perfor
 
 ---
 
-### 2. `get_workflow_template`
+### 2. `get_demo_examples`
 
-**Purpose:** Provide example Python workflow structure for agent to use as template.
+**Purpose:** Provide working Demo class examples for agent to learn from and adapt.
 
 **Input:** 
 ```json
 {
-  "scenario": "index_comparison" | "write_performance" | "compound_index" | "general"
+  "scenario": "index_comparison" | "compound_index" | "write_performance" | "all"
 }
 ```
 
 **Output:**
 ```json
 {
-  "template": "<Python code string>",
-  "description": "Template for comparing performance with/without index",
-  "api_reference": {
-    "init": {
-      "signature": "init(collection: str, scale: str | int, distribution: str = 'zipfian')",
-      "description": "Load test data into collection",
+  "examples": [
+    {
+      "name": "index_performance",
+      "file": "src/mdbpl/demos/index_performance.py",
+      "description": "Compare performance with/without single-field index on numeric field",
+      "use_when": [
+        "User has slow queries with range filters",
+        "Missing indexes detected on filter fields",
+        "Queries involve sorting on indexed field",
+        "Collection scans detected in query plans"
+      ],
+      "pattern": "baseline → create_index → optimized → compare",
+      "code": "<full index_performance.py source code with inline comments>",
+      "key_learnings": [
+        "Use ShellCommand for mdbpl CLI (init, run, compare)",
+        "Use MongoshCommand for MongoDB operations (createIndex, queries)",
+        "Always tag benchmarks for comparison",
+        "Include markdown to explain WHY each step matters",
+        "collapse_output=False shows detailed command output"
+      ]
+    }
+  ],
+  "command_reference": {
+    "ShellCommand": {
+      "description": "Execute shell commands (mdbpl CLI)",
       "examples": [
-        "init(collection='orders', scale=10000)",
-        "init(collection='users', scale='50k', distribution='uniform')"
+        "ShellCommand('mdbpl init --scale 10k')",
+        "ShellCommand('mdbpl run --workload range-scan --tag baseline')",
+        "ShellCommand('mdbpl compare --tags baseline,optimized')"
       ]
     },
-    "benchmark": {
-      "signature": "benchmark(query: dict, sort: dict = None, tag: str = None) -> dict",
-      "description": "Run benchmark against query pattern",
+    "MongoshCommand": {
+      "description": "Execute mongosh JavaScript code",
       "examples": [
-        "benchmark(query={'userId': 123}, tag='baseline')",
-        "benchmark(query={'status': 'active'}, sort={'createdAt': -1})"
-      ]
-    },
-    "create_index": {
-      "signature": "create_index(spec: dict, collection: str = None)",
-      "description": "Create index on collection",
-      "examples": [
-        "create_index({'userId': 1})",
-        "create_index({'userId': 1, 'status': 1, 'createdAt': -1})"
-      ]
-    },
-    "compare": {
-      "signature": "compare(tags: list[str]) -> dict",
-      "description": "Compare benchmark results by tag",
-      "examples": [
-        "compare(['baseline', 'with_index'])"
+        "MongoshCommand('db.collection.createIndex({field: 1})')",
+        "MongoshCommand('db.collection.getIndexes().forEach(...)')"
       ]
     }
   },
-  "template_code": """
-from mdbpl import init, benchmark, create_index, compare
-
-# Step 1: Initialize test data
-print("Loading test data...")
-init(collection='orders', scale=10000)
-
-# Step 2: Baseline benchmark (no index)
-print("Running baseline benchmark...")
-baseline = benchmark(
-    query={'userId': 123, 'status': 'pending'},
-    sort={'createdAt': -1},
-    tag='baseline'
-)
-print(f"Baseline throughput: {baseline['throughput']} ops/sec")
-
-# Step 3: Create recommended index
-print("Creating compound index...")
-create_index({
-    'userId': 1,
-    'status': 1,
-    'createdAt': -1
-})
-
-# Step 4: Benchmark with index
-print("Running optimized benchmark...")
-optimized = benchmark(
-    query={'userId': 123, 'status': 'pending'},
-    sort={'createdAt': -1},
-    tag='optimized'
-)
-print(f"Optimized throughput: {optimized['throughput']} ops/sec")
-
-# Step 5: Compare results
-print("\\nComparison:")
-results = compare(['baseline', 'optimized'])
-improvement = optimized['throughput'] / baseline['throughput']
-print(f"Improvement: {improvement:.1f}x faster")
-"""
+  "demo_structure": {
+    "class_attributes": {
+      "id": "unique-identifier (lowercase-hyphenated)",
+      "title": "Display Name",
+      "description": "Short description for selection",
+      "markdown_file": "Leave empty for inline markdown"
+    },
+    "steps_method": "Returns List[DemoStep] with sequential steps",
+    "demostep_attributes": {
+      "id": "step-identifier",
+      "title": "Step Title",
+      "description": "Brief step description",
+      "markdown": "Detailed explanation with context",
+      "commands": "List of ShellCommand or MongoshCommand"
+    }
+  }
 }
 ```
 
-**Agent Usage:** Agent uses this template to generate workflows tailored to user's specific queries.
+**Agent Usage:** 
+1. Agent reads example demos to learn structure
+2. Agent adapts pattern to user's specific query
+3. Agent generates new Demo subclass based on example
+4. Agent ensures generated code follows proven patterns
 
 ---
 
@@ -326,55 +314,117 @@ print(f"Improvement: {improvement:.1f}x faster")
 
 ---
 
-### 5. `execute_workflow`
+### 5. `execute_demo`
 
-**Purpose:** Execute agent-generated Python workflow in isolated container.
+**Purpose:** Execute agent-generated Demo class in isolated container.
 
 **Input:**
 ```json
 {
-  "workflow_code": "<Python code string>",
+  "demo_code": "<Python code - complete Demo subclass>",
   "mongodb_uri": "mongodb://...",
   "timeout_seconds": 300
 }
 ```
 
-**Output:**
+**Execution Process:**
+1. Validate Demo class structure (has id, title, steps() method)
+2. Write to temporary module in container
+3. Dynamically import Demo class
+4. Instantiate and execute via existing Demo executor
+5. Capture output and results
+6. Return structured results
+
+**Output (Success):**
 ```json
 {
   "success": true,
   "execution_time_seconds": 45.2,
-  "stdout": "<captured output>",
-  "stderr": "",
-  "exit_code": 0,
-  "results": {
+  "demo_id": "user-order-query-optimization",
+  "steps_completed": 5,
+  "steps": [
+    {
+      "id": "init",
+      "title": "Load Test Data",
+      "success": true,
+      "output": "Loaded 10,000 documents..."
+    },
+    {
+      "id": "baseline",
+      "title": "Baseline Benchmark",
+      "success": true,
+      "output": "Throughput: 95 ops/sec..."
+    },
+    {
+      "id": "create-index",
+      "title": "Create Index",
+      "success": true,
+      "output": "Index created on {userId: 1, status: 1}"
+    },
+    {
+      "id": "optimized",
+      "title": "Optimized Benchmark",
+      "success": true,
+      "output": "Throughput: 1020 ops/sec..."
+    },
+    {
+      "id": "compare",
+      "title": "Compare Results",
+      "success": true,
+      "output": "10.7x improvement in throughput..."
+    }
+  ],
+  "benchmark_results": {
     "baseline": {
-      "throughput": 100.5,
-      "latency_p50": 10.2,
-      "latency_p99": 45.3
+      "run_id": 53,
+      "throughput": 95.3,
+      "latency_p50": 10.5,
+      "latency_p99": 45.2
     },
     "optimized": {
-      "throughput": 1050.2,
-      "latency_p50": 1.1,
-      "latency_p99": 4.8
+      "run_id": 54,
+      "throughput": 1020.4,
+      "latency_p50": 0.9,
+      "latency_p99": 4.1
     }
   }
 }
 ```
 
-**Error Output:**
+**Output (Error - Syntax):**
 ```json
 {
   "success": false,
-  "execution_time_seconds": 2.1,
-  "stdout": "",
-  "stderr": "IndexError: list index out of range\n...",
-  "exit_code": 1,
-  "error": "Workflow execution failed"
+  "error": "SyntaxError: invalid syntax",
+  "error_type": "syntax",
+  "line": 42,
+  "message": "Missing closing parenthesis in DemoStep definition",
+  "suggestion": "Check DemoStep() calls for matching parentheses"
 }
 ```
 
-**Agent Usage:** Agent sends generated workflow code for execution and receives benchmark results.
+**Output (Error - Runtime):**
+```json
+{
+  "success": false,
+  "error": "IndexError: list index out of range",
+  "error_type": "runtime",
+  "step_id": "baseline",
+  "traceback": "<full traceback>",
+  "steps_completed": 1,
+  "steps": [
+    {"id": "init", "success": true},
+    {"id": "baseline", "success": false, "error": "IndexError..."}
+  ]
+}
+```
+
+**Agent Usage:** 
+1. Agent generates Demo subclass code
+2. Agent calls execute_demo with generated code
+3. If syntax error, agent fixes and retries
+4. If runtime error, agent debugs and retries
+5. On success, agent presents results to user
 
 ---
 
@@ -417,46 +467,168 @@ Agent finds:
 - Only has index on `userId`
 - Missing compound index!
 
-**4. Agent Calls MCP: `get_workflow_template`**
+**4. Agent Calls MCP: `get_demo_examples`**
 ```json
 {"scenario": "index_comparison"}
 ```
 
-**MCP Returns:** Template code
+**MCP Returns:** Full `index_performance.py` source code with inline comments and patterns
 
-**5. Agent Generates Workflow**
+**5. Agent Generates Demo Subclass**
+
+Agent adapts the example pattern to user's specific query:
+
 ```python
-from mdbpl import init, benchmark, create_index, compare
+"""
+Order Query Optimization Demo
+Generated for: db.orders.find({userId: X, status: 'pending'}).sort({createdAt: -1})
+"""
 
-# Load realistic order data
-init(collection='orders', scale=15000)
+from typing import List
+from mdbpl.demos.base import Demo, DemoStep, ShellCommand, MongoshCommand
 
-# Test current query without compound index
-baseline = benchmark(
-    query={'userId': 123, 'status': 'pending'},
-    sort={'createdAt': -1},
-    tag='current'
-)
 
-# Create recommended compound index
-create_index({'userId': 1, 'status': 1, 'createdAt': -1})
+class OrderQueryOptimizationDemo(Demo):
+    """
+    Optimize order lookup query with compound index.
+    
+    Pattern: baseline → create_compound_index → optimized → compare
+    Current: Only indexed on userId (partial match)
+    Recommended: Compound index {userId: 1, status: 1, createdAt: -1}
+    """
+    
+    id = "order-query-optimization"
+    title = "Orders Query Optimization"
+    description = "Optimize userId + status filter with sort on createdAt"
+    markdown_file = ""
+    
+    def steps(self) -> List[DemoStep]:
+        return [
+            # STEP 1: Initialize realistic order data
+            DemoStep(
+                id="init",
+                title="Load Order Test Data",
+                description="Initialize 15,000 order documents matching production schema",
+                markdown="""
+## Initialize Test Data
 
-# Test with compound index
-optimized = benchmark(
-    query={'userId': 123, 'status': 'pending'},
-    sort={'createdAt': -1},
-    tag='optimized'
-)
+Load 15,000 orders to match production scale. Using YCSB base data and adding order-specific fields (userId, status, createdAt).
+""",
+                commands=[
+                    ShellCommand("mdbpl init --scale 15k", collapse_output=False),
+                    MongoshCommand("""
+// Add order-specific fields
+var statuses = ['pending', 'completed', 'cancelled'];
+var batch = [];
+var now = new Date();
 
-# Show results
-results = compare(['current', 'optimized'])
-print(f"Improvement: {optimized['throughput']/baseline['throughput']:.1f}x")
+db.usertable.find().forEach(function(doc, idx) {
+    batch.push({
+        updateOne: {
+            filter: {_id: doc._id},
+            update: {$set: {
+                userId: Math.floor(idx / 10),  // ~10 orders per user
+                status: statuses[idx % 3],
+                createdAt: new Date(now - Math.random() * 30 * 24 * 60 * 60 * 1000)
+            }}
+        }
+    });
+    if (batch.length >= 1000) {
+        db.usertable.bulkWrite(batch);
+        batch = [];
+    }
+});
+if (batch.length > 0) db.usertable.bulkWrite(batch);
+
+print("✓ Added order fields to 15,000 documents");
+""", collapse_output=False)
+                ]
+            ),
+            
+            # STEP 2: Baseline with current index
+            DemoStep(
+                id="baseline",
+                title="Baseline Performance (userId index only)",
+                description="Test query with existing single-field index",
+                markdown="""
+## Baseline Performance
+
+Current query uses existing userId index but still needs to:
+1. Scan all orders for this userId
+2. Filter by status in memory
+3. Sort by createdAt in memory
+
+Expected: Moderate performance, in-memory operations.
+""",
+                commands=[
+                    ShellCommand("mdbpl run --query '{\"userId\": 123, \"status\": \"pending\"}' --sort '{\"createdAt\": -1}' --tag baseline")
+                ]
+            ),
+            
+            # STEP 3: Create compound index
+            DemoStep(
+                id="create-index",
+                title="Create Compound Index",
+                description="Create index on {userId: 1, status: 1, createdAt: -1}",
+                markdown="""
+## Create Compound Index
+
+Compound index field order:
+1. userId (equality filter) - first for efficient user lookup
+2. status (equality filter) - second for additional filtering
+3. createdAt (sort field) - last, descending to match query sort
+
+This allows MongoDB to use index for entire query execution.
+""",
+                commands=[
+                    MongoshCommand("""
+db.usertable.createIndex({userId: 1, status: 1, createdAt: -1});
+print("✓ Created compound index: {userId: 1, status: 1, createdAt: -1}");
+""")
+                ]
+            ),
+            
+            # STEP 4: Optimized benchmark
+            DemoStep(
+                id="optimized",
+                title="Optimized Performance",
+                description="Test query with compound index",
+                markdown="""
+## Optimized Performance
+
+With compound index, MongoDB can:
+1. Jump directly to userId=123 in index
+2. Filter to status='pending' within that range
+3. Results already sorted by createdAt (descending)
+
+Expected: 10-50x improvement, no in-memory operations.
+""",
+                commands=[
+                    ShellCommand("mdbpl run --query '{\"userId\": 123, \"status\": \"pending\"}' --sort '{\"createdAt\": -1}' --tag optimized")
+                ]
+            ),
+            
+            # STEP 5: Compare
+            DemoStep(
+                id="compare",
+                title="Compare Results",
+                description="Show before/after comparison",
+                markdown="""
+## Results Comparison
+
+Compare throughput, latency, and query execution stats between baseline and optimized versions.
+""",
+                commands=[
+                    ShellCommand("mdbpl compare --tags baseline,optimized")
+                ]
+            )
+        ]
 ```
 
-**6. Agent Calls MCP: `execute_workflow`**
+**6. Agent Calls MCP: `execute_demo`**
 ```json
 {
-  "workflow_code": "<generated code>",
+  "demo_code": "<generated Demo subclass code>",
   "mongodb_uri": "mongodb://localhost:27017"
 }
 ```
@@ -465,9 +637,18 @@ print(f"Improvement: {optimized['throughput']/baseline['throughput']:.1f}x")
 ```json
 {
   "success": true,
-  "results": {
-    "current": {"throughput": 95},
-    "optimized": {"throughput": 1020}
+  "steps_completed": 5,
+  "benchmark_results": {
+    "baseline": {
+      "run_id": 53,
+      "throughput": 95.3,
+      "latency_p50": 10.5
+    },
+    "optimized": {
+      "run_id": 54,
+      "throughput": 1020.4,
+      "latency_p50": 0.9
+    }
   }
 }
 ```
@@ -486,6 +667,8 @@ This compound index will:
 ✓ Filter efficiently on userId and status
 ✓ Sort using the index (no in-memory sort)
 ✓ Dramatically reduce query latency
+
+I've run a performance test to verify - see the full comparison in the Results tab.
 ```
 
 ---
@@ -495,25 +678,48 @@ This compound index will:
 ```
 mongodb-performance-lab/
 ├── src/mdbpl/              # Existing CLI/library
-│   ├── api.py             # Python API for workflows
+│   ├── demos/
+│   │   ├── base.py        # Demo, DemoStep, Command classes
+│   │   └── index_performance.py  # ✨ Enhanced with LLM guidance comments
+│   ├── executor.py        # Step execution engine
 │   └── ...
 │
 ├── mcp/                    # NEW: MCP server
-│   ├── server.py          # Main MCP server
+│   ├── server.py          # Main MCP server (stdio protocol)
 │   ├── Dockerfile         # MCP container
 │   ├── requirements.txt   # mcp, pymongo
 │   │
 │   └── tools/             # MCP tool implementations
 │       ├── __init__.py
 │       ├── analysis_guide.py    # get_analysis_guide
-│       ├── templates.py         # get_workflow_template
+│       ├── demo_examples.py     # get_demo_examples (returns demo source)
 │       ├── best_practices.py    # get_best_practices
-│       ├── schema.py            # get_schema
-│       └── executor.py          # execute_workflow
+│       ├── schema.py            # get_schema (introspect MongoDB)
+│       └── executor.py          # execute_demo (run LLM-generated Demo)
 │
 ├── docker-compose.yml     # Add mcp-server service
 └── MCP_PLAN.md           # This document
 ```
+
+### Key Files
+
+**`src/mdbpl/demos/index_performance.py`** (Enhanced)
+- Added comprehensive inline comments for LLM learning
+- Command pattern examples (ShellCommand, MongoshCommand)
+- Clear step progression: baseline → optimization → comparison
+- Serves as primary template for LLM-generated demos
+
+**`mcp/tools/demo_examples.py`** (New)
+- Reads actual demo source files
+- Returns full code with annotations
+- Provides structure reference
+- Maps scenarios to appropriate demo examples
+
+**`mcp/tools/executor.py`** (New)
+- Validates generated Demo class structure
+- Dynamically imports and instantiates Demo
+- Executes via existing Demo.execute_step() infrastructure
+- Returns structured results with benchmark data
 
 ---
 
@@ -637,15 +843,18 @@ Or use stdio over Docker exec:
 ## Future Enhancements
 
 ### Phase 2: Advanced Features
+- **Multiple demo templates**: Add compound_index, write_performance, aggregation_pipeline demos
 - **Baseline tracking**: Store and compare against previous runs
 - **CI/CD integration**: Automated performance regression testing
-- **Schema recommendations**: Suggest schema optimizations
+- **Schema recommendations**: Suggest schema optimizations beyond indexing
 - **Aggregation pipeline analysis**: Optimize complex pipelines
+- **Template patterns documentation**: Add structured pattern catalog at top of demo files for easier LLM parsing (e.g., JSON/YAML frontmatter describing common workflow patterns)
 
 ### Phase 3: UI Integration
-- **Web dashboard**: Visualize benchmark results
-- **Real-time monitoring**: Watch workflow execution
+- **Web dashboard**: Visualize benchmark results (already exists, extend for MCP-generated demos)
+- **Real-time monitoring**: Watch workflow execution progress
 - **History**: Track performance over time
+- **Demo library**: Browse and run LLM-generated demos from UI
 
 ### Phase 4: Multi-Database
 - **PostgreSQL support**: Expand beyond MongoDB
@@ -656,24 +865,81 @@ Or use stdio over Docker exec:
 
 ## Implementation Checklist
 
+### Phase 1: Core MCP Server
+- [x] Enhance `index_performance.py` with inline LLM guidance comments
 - [ ] Create `mcp/` directory structure
-- [ ] Implement `mcp/server.py` with MCP protocol
+- [ ] Implement `mcp/server.py` with MCP protocol (stdio)
 - [ ] Implement `get_analysis_guide` tool
-- [ ] Implement `get_workflow_template` tool
+- [ ] Implement `get_demo_examples` tool (reads demo source files)
 - [ ] Implement `get_best_practices` tool
-- [ ] Implement `get_schema` tool
-- [ ] Implement `execute_workflow` tool
+- [ ] Implement `get_schema` tool (MongoDB introspection)
+- [ ] Implement `execute_demo` tool (dynamic import + execution)
+
+### Phase 2: Infrastructure
 - [ ] Create `mcp/Dockerfile`
-- [ ] Update `docker-compose.yml`
-- [ ] Create Python API in `src/mdbpl/api.py` for workflows
+- [ ] Update `docker-compose.yml` with mcp-server service
+- [ ] Add validation for Demo class structure
+- [ ] Add sandbox security (resource limits, timeout)
+- [ ] Test dynamic Demo import and execution
+
+### Phase 3: Testing & Documentation
 - [ ] Test MCP server with VS Code agent
+- [ ] Create example LLM-generated demos
+- [ ] Verify error handling (syntax, runtime errors)
 - [ ] Document usage in README.md
+- [ ] Add MCP configuration examples for VS Code
 
 ---
 
 ## Notes
 
-- **Agent is the brain**: All analysis and generation happens in agent
-- **MCP is the executor**: Provides knowledge and runs workflows
-- **Python workflows**: Full expressiveness, LLM-friendly
-- **Security through isolation**: Container sandboxing protects user
+### Why Demo Classes Instead of Python API?
+
+**Advantages:**
+- **Proven patterns**: Reuses working demo infrastructure
+- **Self-documenting**: Markdown explains WHY, not just HOW
+- **Structured**: Clear class hierarchy, type hints
+- **Visual**: Generated demos can run in UI too
+- **LLM-friendly**: Python classes are easy for LLMs to generate
+- **Zero new code**: No separate API layer needed
+
+**Tradeoffs:**
+- Slightly more verbose than imperative API
+- Requires understanding of class structure
+- But: LLM learns from examples easily
+
+### Agent vs MCP Responsibilities
+
+**Agent (Has Workspace Access):**
+- Read user's source code
+- Find MongoDB queries and patterns
+- Analyze query structure (filters, sorts, projections)
+- Generate Demo subclass based on examples
+- Interpret results and make recommendations
+
+**MCP (Sandboxed Execution):**
+- Provide demo examples to learn from
+- Provide best practices and guidance
+- Introspect MongoDB schema (with user-provided URI)
+- Execute generated Demo classes safely
+- Return structured benchmark results
+
+### Security Model
+
+**Container Isolation:**
+- Demo execution happens in Docker container
+- No access to host filesystem
+- Limited network (MongoDB only)
+- Resource limits (CPU, memory, timeout)
+
+**Code Validation:**
+- Syntax check before execution
+- Validate Demo class structure
+- Ensure required methods exist
+- Timeout enforcement (default 5 minutes)
+
+**MongoDB Access:**
+- User provides test database URI
+- Never connect to production
+- Agent-controlled credentials
+- Recommend read-only user for schema introspection

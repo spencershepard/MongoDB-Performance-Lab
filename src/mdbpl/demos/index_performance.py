@@ -1,4 +1,27 @@
-"""Index Performance Demo - Shows dramatic read improvement with proper indexing."""
+"""
+Index Performance Demo - Shows dramatic read improvement with proper indexing.
+
+TEMPLATE PATTERNS FOR LLM-GENERATED WORKFLOWS:
+
+This demo follows the standard performance testing workflow:
+1. Initialize test data matching your query pattern
+2. Run baseline benchmark (before optimization)
+3. Apply optimization (create index, change schema, etc.)
+4. Run optimized benchmark (same query after optimization)
+5. Compare results side-by-side
+
+COMMAND PATTERNS:
+- ShellCommand: For mdbpl CLI commands (init, run, compare)
+- MongoshCommand: For direct MongoDB operations (createIndex, queries, updates)
+- Always tag benchmarks for easy comparison
+- Use collapse_output=False to show detailed results
+
+WORKFLOW STRUCTURE:
+- Each DemoStep has: id, title, description, markdown, commands
+- markdown explains WHY this step matters (context for LLM and users)
+- commands list contains ShellCommand or MongoshCommand objects
+- Steps execute sequentially in order
+"""
 
 from typing import List
 from .base import Demo, DemoStep, ShellCommand, MongoshCommand
@@ -6,56 +29,53 @@ from .base import Demo, DemoStep, ShellCommand, MongoshCommand
 
 class IndexPerformanceDemo(Demo):
     """
-    Demonstrates the dramatic performance improvement when adding an index.
+    Demonstrates dramatic performance improvement when adding an index.
     
-    Uses a range-scan workload that queries by numeric score field with sorting.
-    Without an index, this requires a full collection scan and in-memory sort.
-    With an index on score, MongoDB can use an index scan which is 10-100x faster.
+    Pattern: baseline → optimization → measurement → comparison
+    This is the recommended structure for index optimization workflows.
+    
+    Use Case: Range queries with sorting (common for date/numeric fields)
+    Without Index: Full collection scan + in-memory sort (slow)
+    With Index: Index scan with pre-sorted data (10-100x faster)
     """
     
+    # Unique identifier for this demo (lowercase, hyphenated)
     id = "index-performance"
+    
+    # Display name shown in UI
     title = "Index Performance Impact"
+    
+    # Short description for demo selection
     description = "Demonstrates dramatic read performance improvement with proper indexing"
-    markdown_file = ""  # Using inline markdown instead
+    
+    # Using inline markdown instead of separate file
+    markdown_file = ""
     
     def steps(self) -> List[DemoStep]:
         """Define the demo steps."""
         return [
+            # STEP 1: Initialize test data
+            # Pattern: Load realistic data matching your query workload
             DemoStep(
                 id="init",
                 title="Initialize Test Dataset",
-                description="Load 100,000 YCSB documents and add numeric score field for range queries",
+                description="Load 10,000 YCSB documents and add numeric score field for range queries",
                 markdown="""
-## Step 1: Initialize Test Data
+## Initialize Test Data
 
-We'll start by loading 100,000 test documents using the YCSB (Yahoo Cloud Serving Benchmark) dataset. 
+Load 10,000 test documents using YCSB (Yahoo Cloud Serving Benchmark) format. YCSB generates realistic documents with 10 random fields, simulating real-world data like user profiles or product catalogs.
 
-YCSB generates realistic documents with 10 random fields (`field0` through `field9`), each containing 100-character random strings. This simulates real-world data like user profiles or product catalogs.
+Then add a **numeric `score` field** (0-9999) to enable range query testing. Range queries are common for filtering by dates, prices, ratings, or other numeric values.
 
-After loading the data, we'll add a **numeric `score` field** to each document. This field will range from 0-99999 and allows us to test range queries - a common pattern where you query for values within a range (e.g., "find all products with price between $50-$100").
-
-### Why a numeric field?
-
-Range queries on numeric fields are a classic use case for indexes. Without an index, MongoDB must:
-1. Scan **every document** in the collection
-2. Check if each document's score falls within the range
-3. Sort the results in memory (expensive!)
-
-With an index, MongoDB can jump directly to the start of the range and efficiently traverse the sorted index.
-
-### Why 100k documents?
-
-With larger datasets:
-- Collection scans become significantly slower (must read all 100k docs)
-- In-memory sorts become expensive (sorting thousands of matches)
-- Index benefits become dramatic (O(log n) vs O(n) matters more)
-
-### Commands executed:
-- `mdbpl init --scale 10k` - Loads 10,000 YCSB documents (~5MB of data)
-- `mongosh` script - Adds sequential score field (0-9999) to all documents
+**Why 10k documents?** With larger datasets, collection scans become significantly slower while index lookups stay fast, making the performance difference dramatic.
 """,
                 commands=[
+                    # Pattern: Use mdbpl init to load YCSB test data
+                    # --scale controls dataset size (10k = 10,000 documents)
                     ShellCommand("mdbpl init --scale 10k", collapse_output=False),
+                    
+                    # Pattern: Use MongoshCommand for MongoDB operations
+                    # This adds a numeric field for range query testing
                     MongoshCommand("""
 var count = 0;
 var batch = [];
@@ -74,95 +94,67 @@ print("Sample: " + JSON.stringify(db.usertable.findOne({}, {_id: 1, score: 1})))
                 ]
             ),
             
+            # STEP 2: Baseline benchmark (before optimization)
+            # Pattern: Always measure before optimization to establish baseline
+            # Tag your benchmark for easy comparison later
             DemoStep(
                 id="baseline",
                 title="Baseline Performance (No Index)",
                 description="Run range scans on numeric score field without an index",
                 markdown="""
-## Step 2: Baseline Performance Test
+## Baseline Performance Test
 
-Now we'll run a benchmark workload **without any index on the score field** to establish our baseline performance.
+Run benchmark workload **without any index** on the score field to establish baseline performance.
 
-### The Workload
-
-The `range-scan` workload performs:
-- **80% range queries** on the score field (e.g., `{score: {$gte: 3000, $lt: 5000}}`)
+**Workload:** The `range-scan` workload performs:
+- 80% range queries on score field (e.g., `{score: {$gte: 3000, $lt: 5000}}`)
 - Each query sorts by score and returns 100 documents
-- **20% point reads** by `_id` (already indexed)
+- 20% point reads by `_id` (already indexed)
 
-### What MongoDB Must Do (Without Index)
+**Without Index:** MongoDB performs a COLLSCAN (collection scan):
+1. Reads every document in the collection (10,000 documents)
+2. Checks if each document's score matches the range
+3. Collects all matching documents (~2,000 matches)
+4. **Sorts results in memory** (expensive!)
+5. Returns first 100
 
-For each range query, MongoDB performs a **COLLSCAN** (collection scan):
-1. **Reads every single document** in the collection (100,000 documents!)
-2. Checks if each document's score falls within the range
-3. Collects all matching documents (~2,000 matches for a 2,000-value range)
-4. **Sorts the results in memory** (expensive!)
-5. Returns the first 100 after sorting
-
-This is **very slow** because:
-- Full collection scan touches every document (100k reads!)
-- In-memory sort of ~2,000 documents per query
-- No way to skip non-matching documents
-- Must scan entire 50MB+ of data for every query
-
-### Expected Results
-
-Watch for:
-- Low throughput (operations per second) - likely 10-50 ops/sec
-- High latency (milliseconds per operation) - likely 50-200ms per query
-- **collection_scans** metric will be high
-- **index_scans** will be 0 (except for _id lookups)
-
-Let's see how slow it is...
+**Expected:** Low throughput (10-50 ops/sec), high latency (50-200ms), high collection_scans metric.
 """,
                 commands=[
+                    # Pattern: Run benchmark with descriptive tag
+                    # Tag is used later in compare step
                     ShellCommand("mdbpl run --workload range-scan --duration 15s --tag baseline")
                 ]
             ),
             
+            # STEP 3: Apply optimization (create index)
+            # Pattern: Use MongoshCommand for MongoDB DDL operations
             DemoStep(
                 id="create-index",
                 title="Create Index on Score Field",
                 description="Create a single-field ascending index on the score field",
                 markdown="""
-## Step 3: Create an Index
+## Create Index
 
-Now we'll create a simple **single-field index** on the score field:
+Create a **single-field index** on the score field:
 
 ```javascript
 db.usertable.createIndex({score: 1})
 ```
 
-### What This Does
+**What this does:** MongoDB creates a B-tree index structure that stores score values in sorted order with pointers to documents. Enables O(log n) lookups instead of O(n) scans.
 
-MongoDB creates a **B-tree index** structure that:
-1. **Stores score values in sorted order**
-2. Includes pointers to the actual documents
-3. Allows **O(log n)** lookups instead of **O(n)** scans
-4. Enables efficient range traversal
+**How it helps:** After indexing, range queries use an IXSCAN (index scan) instead of COLLSCAN:
+1. Jump directly to score=3000 in the index
+2. Traverse sequentially (already sorted)
+3. Stop at score=5000
+4. No in-memory sorting needed
 
-### How Indexes Work
-
-Think of it like a phone book:
-- **Without index**: Like searching for all people with birthdays in January by reading every single page
-- **With index**: Like having a separate "Birthday Index" where you can jump directly to January entries
-
-### Storage Cost
-
-The index will consume additional disk space (~2-3MB for 100,000 documents), but the performance gain is worth it for read-heavy workloads. This is a tiny fraction of the total data size (~50MB).
-
-### What Changes for Queries
-
-After creating this index, queries like `{score: {$gte: 3000, $lt: 5000}}` will:
-1. **Use an index scan (IXSCAN)** instead of collection scan
-2. Jump directly to score=3000 in the index
-3. Traverse the index sequentially (already sorted!)
-4. Stop at score=5000
-5. No in-memory sorting needed
-
-Let's create it...
+**Storage cost:** ~2-3MB for 10,000 documents (minimal compared to query speed gains).
 """,
                 commands=[
+                    # Pattern: Create indexes using MongoshCommand
+                    # Use ascending (1) or descending (-1) based on query sort order
                     MongoshCommand("""
 db.usertable.createIndex({score: 1});
 print("✓ Index created on score field");
@@ -175,93 +167,81 @@ db.usertable.getIndexes().forEach(function(idx) {
                 ]
             ),
             
+            # STEP 4: Measure after optimization
+            # Pattern: Run same benchmark with identical parameters + different tag
             DemoStep(
                 id="with-index",
                 title="Performance With Index",
                 description="Re-run the same range-scan workload with the index in place",
                 markdown="""
-## Step 4: Performance Test With Index
+## Performance With Index
 
-Now we'll run the **exact same workload** again, but this time MongoDB will use our new index on the score field.
+Run the **exact same workload** again, but now MongoDB uses the index.
 
-### What MongoDB Does Now (With Index)
+**With Index:** MongoDB performs an IXSCAN (index scan):
+1. Jump directly to score=3000 (O(log n) lookup)
+2. Traverse index sequentially (already sorted)
+3. Stop at score=5000
+4. Return first 100 (no in-memory sort needed)
 
-For each range query, MongoDB performs an **IXSCAN** (index scan):
-1. **Jumps directly** to score=3000 in the sorted index (O(log n) lookup)
-2. **Traverses the index** sequentially reading entries in score order
-3. Stops at score=5000
-4. Returns first 100 documents (already sorted!)
-5. **No in-memory sort needed!**
+**Why it's fast:**
+- Skips non-matching documents entirely
+- Only examines ~100 documents instead of 10,000 (100x reduction)
+- Results already in sorted order
+- O(log n) vs O(n) makes huge difference at scale
 
-### Why This is Fast
-
-- **Skips non-matching documents** entirely
-- Only reads ~100 documents instead of 100,000 (1000x fewer reads!)
-- Results are already in sorted order
-- Uses efficient B-tree structure
-- O(log n) lookup vs O(n) scan makes huge difference at this scale
-
-### Expected Improvements
-
-Watch for dramatic improvements:
-- **50-100x higher throughput** (operations per second) - expect 1,000-5,000 ops/sec
-- **95%+ lower latency** (milliseconds per operation) - expect 1-5ms per query
-- **index_scans** metric will be high
-- **collection_scans** will be near zero
-- **docs_examined** will be ~100 instead of 100,000 (1000x reduction!)
-
-Let's see the improvement...
+**Expected improvements:**
+- **50-100x higher throughput** - expect 1,000-5,000 ops/sec (vs 10-50)
+- **95%+ lower latency** - expect 1-5ms per query (vs 50-200ms)
+- **index_scans** high, **collection_scans** near zero
+- **docs_examined** ~100 instead of 10,000
 """,
                 commands=[
+                    # Pattern: Use same benchmark parameters, different tag
+                    # This ensures apples-to-apples comparison
                     ShellCommand("mdbpl run --workload range-scan --duration 15s --tag with-index")
                 ]
             ),
             
+            # STEP 5: Compare results
+            # Pattern: Use mdbpl compare with tags from previous benchmarks
             DemoStep(
                 id="compare",
                 title="Compare Results",
                 description="Display side-by-side comparison of baseline vs indexed performance",
                 markdown="""
-## Step 5: Compare the Results
+## Compare Results
 
-Now let's see the before and after comparison! The `mdbpl compare` command will show us:
+Side-by-side comparison showing the dramatic impact of proper indexing.
 
-### Key Metrics to Watch
+**Key Metrics:**
 
 **Throughput (ops/sec)**
-- Baseline: ~10-50 ops/sec (slow - full scans on 100k docs)
-- With Index: ~1,000-5,000 ops/sec (fast - index lookups)
+- Baseline: ~10-50 (full scans)
+- With Index: ~1,000-5,000 (index lookups)
 - **Expected: 50-100x improvement** 🚀
 
-**Latency (milliseconds)**
-- Baseline: ~50-200ms per operation (full collection scan + sort)
-- With Index: ~1-5ms per operation (index traversal)
+**Latency (ms)**
+- Baseline: ~50-200ms (scan + sort)
+- With Index: ~1-5ms (index traversal)
 - **Expected: 95%+ reduction** ⚡
 
 **Query Execution**
-- Baseline: COLLSCAN (100,000 docs examined) + in-memory sort
-- With Index: IXSCAN (~100 docs examined) + index traversal
-- **Expected: 1000x reduction in docs_examined**
+- Baseline: COLLSCAN (10,000 docs examined) + in-memory sort
+- With Index: IXSCAN (~100 docs examined) + index-sorted
+- **Expected: 100x reduction in docs_examined**
 
-### Why Such a Big Difference?
+**Why such a big difference?**
+1. Avoiding full collection scans (10k → ~100 docs)
+2. No in-memory sorting (pre-sorted in index)
+3. Efficient B-tree lookups (O(log n) vs O(n))
+4. Scale matters - larger datasets = bigger wins
 
-The improvement comes from:
-1. **Avoiding full collection scans** (100,000 docs → ~100 docs = 1000x reduction!)
-2. **No in-memory sorting** (pre-sorted in index)
-3. **Efficient B-tree lookups** (O(log n) instead of O(n))
-4. **Scale matters** - With 100k docs, the difference between scanning everything vs using an index is dramatic
-
-### Real-World Impact
-
-This demonstrates why **indexes are critical** for:
-- Range queries on numeric/date fields
-- Sorting operations
-- Queries with high selectivity
-- Read-heavy workloads
-
-The performance difference you're about to see is why database indexing is one of the most important optimization techniques!
+**Real-world impact:** Indexes are critical for range queries, sorting, and read-heavy workloads. This demo shows why indexing is one of the most important database optimization techniques.
 """,
                 commands=[
+                    # Pattern: Compare by tags from previous benchmarks
+                    # Tags must match exactly (comma-separated, no spaces)
                     ShellCommand("mdbpl compare --tags baseline,with-index")
                 ]
             )
