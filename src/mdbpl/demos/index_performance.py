@@ -24,15 +24,15 @@ class IndexPerformanceDemo(Demo):
             DemoStep(
                 id="init",
                 title="Initialize Test Dataset",
-                description="Load 10,000 YCSB documents and add numeric score field for range queries",
+                description="Load 100,000 YCSB documents and add numeric score field for range queries",
                 markdown="""
 ## Step 1: Initialize Test Data
 
-We'll start by loading 10,000 test documents using the YCSB (Yahoo Cloud Serving Benchmark) dataset. 
+We'll start by loading 100,000 test documents using the YCSB (Yahoo Cloud Serving Benchmark) dataset. 
 
 YCSB generates realistic documents with 10 random fields (`field0` through `field9`), each containing 100-character random strings. This simulates real-world data like user profiles or product catalogs.
 
-After loading the data, we'll add a **numeric `score` field** to each document. This field will range from 0-9999 and allows us to test range queries - a common pattern where you query for values within a range (e.g., "find all products with price between $50-$100").
+After loading the data, we'll add a **numeric `score` field** to each document. This field will range from 0-99999 and allows us to test range queries - a common pattern where you query for values within a range (e.g., "find all products with price between $50-$100").
 
 ### Why a numeric field?
 
@@ -43,24 +43,47 @@ Range queries on numeric fields are a classic use case for indexes. Without an i
 
 With an index, MongoDB can jump directly to the start of the range and efficiently traverse the sorted index.
 
+### Why 100k documents?
+
+With larger datasets:
+- Collection scans become significantly slower (must read all 100k docs)
+- In-memory sorts become expensive (sorting thousands of matches)
+- Index benefits become dramatic (O(log n) vs O(n) matters more)
+
 ### Commands executed:
-- `mdbpl init --scale 10k` - Loads 10,000 YCSB documents
-- `mongosh` script - Adds sequential score field (0-9999) to all documents
+- `mdbpl init --scale 100k` - Loads 100,000 YCSB documents (~50MB of data)
+- `mongosh` script - Adds sequential score field (0-99999) to all documents
 """,
                 commands=[
-                    ShellCommand("mdbpl init --scale 10k", collapse_output=True),
+                    ShellCommand("mdbpl init --scale 100k", collapse_output=True),
                     MongoshCommand("""
-use perflab
-// Add a numeric 'score' field to all documents for range query testing
-// This simulates real-world scenarios like user ratings, product prices, timestamps, etc.
+print("Adding score field to documents...");
 var count = 0;
-db.usertable.find().forEach(function(doc) {
-    db.usertable.updateOne(
-        {_id: doc._id},
-        {$set: {score: count++}}
-    );
-});
-print("✓ Added score field to " + count + " documents");
+var batch = [];
+var cursor = db.usertable.find();
+while (cursor.hasNext()) {
+    var doc = cursor.next();
+    batch.push({
+        updateOne: {
+            filter: {_id: doc._id},
+            update: {$set: {score: count++}}
+        }
+    });
+    if (batch.length >= 1000) {
+        db.usertable.bulkWrite(batch);
+        batch = [];
+        if (count % 10000 === 0) {
+            print("  Processed " + count + " documents...");
+        }
+    }
+}
+if (batch.length > 0) {
+    db.usertable.bulkWrite(batch);
+}
+print("✓ Successfully added score field to " + count + " documents");
+print("");
+print("Sample document:");
+printjson(db.usertable.findOne({}, {_id: 1, score: 1, field0: 1}));
 """, collapse_output=True)
                 ]
             ),
@@ -84,22 +107,23 @@ The `range-scan` workload performs:
 ### What MongoDB Must Do (Without Index)
 
 For each range query, MongoDB performs a **COLLSCAN** (collection scan):
-1. **Reads every single document** in the collection (10,000 documents)
+1. **Reads every single document** in the collection (100,000 documents!)
 2. Checks if each document's score falls within the range
 3. Collects all matching documents (~2,000 matches for a 2,000-value range)
 4. **Sorts the results in memory** (expensive!)
 5. Returns the first 100 after sorting
 
 This is **very slow** because:
-- Full collection scan touches every document
+- Full collection scan touches every document (100k reads!)
 - In-memory sort of ~2,000 documents per query
 - No way to skip non-matching documents
+- Must scan entire 50MB+ of data for every query
 
 ### Expected Results
 
 Watch for:
-- Low throughput (operations per second)
-- High latency (milliseconds per operation)
+- Low throughput (operations per second) - likely 10-50 ops/sec
+- High latency (milliseconds per operation) - likely 50-200ms per query
 - **collection_scans** metric will be high
 - **index_scans** will be 0 (except for _id lookups)
 
@@ -139,7 +163,7 @@ Think of it like a phone book:
 
 ### Storage Cost
 
-The index will consume additional disk space (~200KB for 10,000 documents), but the performance gain is worth it for read-heavy workloads.
+The index will consume additional disk space (~2-3MB for 100,000 documents), but the performance gain is worth it for read-heavy workloads. This is a tiny fraction of the total data size (~50MB).
 
 ### What Changes for Queries
 
@@ -154,12 +178,41 @@ Let's create it...
 """,
                 commands=[
                     MongoshCommand("""
-use perflab
-db.usertable.createIndex({score: 1})
-print("✓ Index created successfully on score field")
-db.usertable.getIndexes().forEach(function(idx) {
+try {
+    var result = db.usertable.createIndex({score: 1});
+    print("✓ Index created successfully on score field");
+    print("  Result: " + JSON.stringify(result));
+} catch (e) {
+    print("Note: Index may already exist - " + e.message);
+}
+
+print("");
+print("Current indexes:");
+var indexes = db.usertable.getIndexes();
+indexes.forEach(function(idx) {
     print("  - " + idx.name + ": " + JSON.stringify(idx.key));
 });
+
+print("");
+print("Verifying index usage with explain():");
+try {
+    var explainResult = db.usertable.find({score: {$gte: 5000, $lt: 7000}}).sort({score: 1}).limit(100).explain("executionStats");
+    var stage = explainResult.executionStats.executionStages.stage;
+    var docsExamined = explainResult.executionStats.totalDocsExamined;
+    var docsReturned = explainResult.executionStats.nReturned;
+    
+    print("  Query plan: " + stage);
+    print("  Documents examined: " + docsExamined);
+    print("  Documents returned: " + docsReturned);
+    
+    if (stage === "IXSCAN" || stage === "FETCH") {
+        print("  ✓ Index is being used!");
+    } else {
+        print("  ⚠ WARNING: Not using index scan (got " + stage + ")");
+    }
+} catch (e) {
+    print("  Error running explain: " + e.message);
+}
 """)
                 ]
             ),
@@ -185,18 +238,19 @@ For each range query, MongoDB performs an **IXSCAN** (index scan):
 ### Why This is Fast
 
 - **Skips non-matching documents** entirely
-- Only reads ~100 documents instead of 10,000
+- Only reads ~100 documents instead of 100,000 (1000x fewer reads!)
 - Results are already in sorted order
 - Uses efficient B-tree structure
+- O(log n) lookup vs O(n) scan makes huge difference at this scale
 
 ### Expected Improvements
 
 Watch for dramatic improvements:
-- **10-100x higher throughput** (operations per second)
-- **90%+ lower latency** (milliseconds per operation)
+- **50-100x higher throughput** (operations per second) - expect 1,000-5,000 ops/sec
+- **95%+ lower latency** (milliseconds per operation) - expect 1-5ms per query
 - **index_scans** metric will be high
 - **collection_scans** will be near zero
-- **docs_examined** will be much lower
+- **docs_examined** will be ~100 instead of 100,000 (1000x reduction!)
 
 Let's see the improvement...
 """,
@@ -217,26 +271,27 @@ Now let's see the before and after comparison! The `mdbpl compare` command will 
 ### Key Metrics to Watch
 
 **Throughput (ops/sec)**
-- Baseline: ~50-100 ops/sec (slow!)
-- With Index: ~5,000-10,000 ops/sec (fast!)
+- Baseline: ~10-50 ops/sec (slow - full scans on 100k docs)
+- With Index: ~1,000-5,000 ops/sec (fast - index lookups)
 - **Expected: 50-100x improvement** 🚀
 
 **Latency (milliseconds)**
-- Baseline: ~20-50ms per operation
-- With Index: ~0.2-1ms per operation
+- Baseline: ~50-200ms per operation (full collection scan + sort)
+- With Index: ~1-5ms per operation (index traversal)
 - **Expected: 95%+ reduction** ⚡
 
 **Query Execution**
-- Baseline: COLLSCAN + in-memory sort
-- With Index: IXSCAN + index traversal
-- **Expected: Massive reduction in docs_examined**
+- Baseline: COLLSCAN (100,000 docs examined) + in-memory sort
+- With Index: IXSCAN (~100 docs examined) + index traversal
+- **Expected: 1000x reduction in docs_examined**
 
 ### Why Such a Big Difference?
 
 The improvement comes from:
-1. **Avoiding full collection scans** (10,000 docs → 100 docs)
+1. **Avoiding full collection scans** (100,000 docs → ~100 docs = 1000x reduction!)
 2. **No in-memory sorting** (pre-sorted in index)
 3. **Efficient B-tree lookups** (O(log n) instead of O(n))
+4. **Scale matters** - With 100k docs, the difference between scanning everything vs using an index is dramatic
 
 ### Real-World Impact
 
