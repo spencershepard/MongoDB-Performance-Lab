@@ -142,30 +142,93 @@ db.users.createIndex({email: 1, active: 1})   // Active user lookup
 
 ## Try It Yourself
 
-After the demo runs, experiment with index impact:
+Follow this hands-on workflow to see how excess indexes degrade write performance:
+
+(Use `docker compose exec perflab /bin/bash` to connect to MongoDB and run the commands below.)
+
+### Step 1: Initialize the dataset
 
 ```bash
-docker exec -it mongodb-performance-lab-mongodb-1 mongosh perflab
+mdbpl init --scale 100k
 ```
 
-### Check Index Usage
+This loads 100,000 generic documents into `perflab.usertable`.
+
+### Step 2: Run baseline benchmark (minimal indexes)
+
+```bash
+mdbpl run --workload write-heavy --duration 10s --tag baseline
+```
+
+This runs update operations with only the default `_id` index.
+
+### Step 3: Add indexes with mongosh
+Use MongoDB Compass (GUI) or mongosh (CLI) to create multiple indexes:
+
 ```javascript
-// See which indexes are actually being used
-db.usertable.aggregate([
-  { $indexStats: {} }
-])
+// Connect to MongoDB interactively with mongosh
+mongosh mongodb://mongodb/perflab
+
+// Add 5 indexes to different fields
+for (var i = 0; i < 5; i++) {
+  db.usertable.createIndex({["field" + i]: 1})
+}
+
+// Verify they were created
+db.usertable.getIndexes()
+
+// Check disk space used by indexes
+db.usertable.stats().indexSizes
+
+// Optional: Check which indexes are actually being used
+db.usertable.aggregate([{ $indexStats: {} }])
+// Look at 'accesses.ops' - likely 0 for most of these!
 ```
 
-Look for `accesses.ops` - shows how many times each index was used.
+### Step 4: Run new benchmark (with 5 indexes)
 
-### Remove Unused Indexes
-```javascript
-// If an index has 0 accesses, it's just slowing down writes
-db.usertable.dropIndex("field3_1")
+```bash
+mdbpl run --workload write-heavy --duration 10s --tag 5-indexes
 ```
+
+Same workload, but now each update must maintain 6 indexes (5 new + _id).
+
+### Step 5: Compare results
+
+```bash
+# Compare in the terminal
+mdbpl compare --tags baseline,5-indexes
+
+# Or view in the web UI at http://localhost:8050
+```
+
+You should see:
+- **20-40% lower throughput** (fewer operations per second)
+- **Higher latency** across all percentiles
+- **Same query results** but slower writes
+- **More disk space** used by index data
+
+
+### Key Observations
+
+**What to look for when running these examples:**
+
+1. **Index Sizes**: Each index takes disk space (usually 1-10% of collection size per index)
+2. **Write Latency**: Updates become progressively slower as you add more indexes
+3. **Index Accesses**: `$indexStats` shows which indexes are actually being used
+4. **The Sweet Spot**: Keep only indexes that improve query performance significantly
+
+**Best Practices:**
+- ✅ Create indexes for frequently queried fields
+- ✅ Use compound indexes instead of multiple single-field indexes when possible
+- ✅ Monitor index usage with `$indexStats` and remove unused ones
+- ❌ Don't index every field "just in case"
+- ❌ Don't keep indexes with 0 accesses
 
 ## Learn More
 
 - [MongoDB Indexing Best Practices](https://www.mongodb.com/docs/manual/applications/indexes/)
 - [Index Build Performance](https://www.mongodb.com/docs/manual/core/index-creation/)
 - [Identify Unused Indexes](https://www.mongodb.com/docs/manual/reference/operator/aggregation/indexStats/)
+- [pymongo Documentation](https://pymongo.readthedocs.io/)
+- [mongodb/mongodb PHP Library](https://www.mongodb.com/docs/php-library/current/)

@@ -82,6 +82,74 @@ This is why the **"Docs Examined"** metric is so important - it shows how much w
 | **Throughput** | ~200 ops/sec | 2,000+ ops/sec | 10x faster |
 | **Latency p95** | ~50ms | ~5ms | 90% improvement |
 
+## Try It Yourself
+
+Follow this hands-on workflow to see the impact of indexes firsthand:
+
+(Use `docker compose exec perflab /bin/bash` to connect to MongoDB and run the commands below.)
+
+### Step 1: Initialize the dataset
+
+```bash
+mdbpl init --scale 10k
+```
+
+This loads 10,000 generic documents into `perflab.usertable`.
+
+### Step 2: Run baseline benchmark (no index)
+
+```bash
+mdbpl run --workload read-heavy --duration 15s --tag baseline
+```
+
+This runs range queries against the collection **without** any index on the `score` field.
+
+### Step 3: Add an index
+Use MongoDB Compass (GUI) or mongosh (CLI) to create an index on the `score` field:
+
+```javascript
+// Connect to MongoDB interactively with mongosh
+mongosh mongodb://mongodb/perflab
+
+// Create index on the score field
+db.usertable.createIndex({score: 1})
+
+// Verify it was created
+db.usertable.getIndexes()
+
+// Optional: See what explain shows now
+db.usertable.find({score: {$gte: 5000}}).sort({score: 1}).limit(20)
+  .explain("executionStats")
+// Look for: executionStages.stage: "IXSCAN" (index scan)
+//           totalDocsExamined: ~20-50 instead of 10,000!
+```
+
+### Step 4: Run new benchmark (with index)
+
+```bash
+mdbpl run --workload read-heavy --duration 15s --tag with-index
+```
+
+Same workload, but now queries use the index you just created.
+
+### Step 5: Compare results
+
+```bash
+# Compare in the terminal
+mdbpl compare --tags baseline,with-index
+
+# Or view in the web UI at http://localhost:8050
+```
+
+You should see:
+- **10-100x higher throughput** (operations per second)
+- **90%+ lower latency** (p95 latency)
+- **Dramatic increase in efficiency** (docs examined vs docs returned)
+- **Index scans in the thousands** (vs zero before)
+
 ## Learn More
 
 - [MongoDB Indexing Strategies](https://www.mongodb.com/docs/manual/indexes/)
+- [Explain Plans Documentation](https://www.mongodb.com/docs/manual/reference/explain-results/)
+- [pymongo Documentation](https://pymongo.readthedocs.io/)
+- [mongodb/mongodb PHP Library](https://www.mongodb.com/docs/php-library/current/)

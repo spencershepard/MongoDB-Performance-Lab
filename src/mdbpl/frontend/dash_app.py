@@ -18,7 +18,7 @@ from typing import Optional
 
 import pandas as pd
 import plotly.graph_objects as go
-from dash import Dash, html, dcc, callback, Input, Output, State, no_update, ALL, callback_context
+from dash import Dash, html, dcc, callback, Input, Output, State, no_update, ALL, MATCH, callback_context
 
 from ..demos import list_demos, get_demo
 from ..executor import WorkloadExecutor
@@ -812,6 +812,460 @@ def create_dash_app(requests_pathname_prefix: str = "/") -> Dash:
                 .footer-icon {
                     font-size: 18px;
                 }
+                
+                /* Collapsible code snippet sections */
+                .demo-markdown details {
+                    margin: 20px 0;
+                    padding: 0;
+                    border: 1px solid #e2e8f0;
+                    border-radius: 8px;
+                    background: #ffffff;
+                    overflow: hidden;
+                    transition: all 0.2s ease;
+                }
+                
+                .demo-markdown details:hover {
+                    border-color: #cbd5e1;
+                    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+                }
+                
+                .demo-markdown details[open] {
+                    border-color: #3b82f6;
+                }
+                
+                .demo-markdown summary {
+                    padding: 16px 20px;
+                    cursor: pointer;
+                    user-select: none;
+                    background: #f8fafc;
+                    border-bottom: 1px solid #e2e8f0;
+                    font-size: 16px;
+                    display: flex;
+                    align-items: center;
+                    transition: background 0.2s ease;
+                    list-style: none;
+                }
+                
+                .demo-markdown summary::-webkit-details-marker {
+                    display: none;
+                }
+                
+                .demo-markdown summary::before {
+                    content: '▶';
+                    margin-right: 10px;
+                    color: #64748b;
+                    font-size: 12px;
+                    transition: transform 0.2s ease;
+                    display: inline-block;
+                }
+                
+                .demo-markdown details[open] summary::before {
+                    transform: rotate(90deg);
+                }
+                
+                .demo-markdown summary:hover {
+                    background: #f1f5f9;
+                }
+                
+                .demo-markdown details[open] summary {
+                    background: #eff6ff;
+                    border-bottom-color: #3b82f6;
+                }
+                
+                .demo-markdown details > *:not(summary) {
+                    padding: 0 20px 20px 20px;
+                }
+                
+                .demo-markdown details pre {
+                    margin-top: 16px;
+                }
+                
+                .demo-markdown details > :first-child:not(summary) {
+                    padding-top: 20px;
+                }
+                
+                /* Step-by-step execution styles */
+                .step-card {
+                    margin-bottom: 20px;
+                    padding: 24px;
+                    border-radius: 12px;
+                    border: 2px solid #e2e8f0;
+                    transition: all 0.3s ease;
+                    background: white;
+                }
+                
+                .step-current {
+                    border-color: #3b82f6;
+                    background: linear-gradient(135deg, #eff6ff 0%, #ffffff 100%);
+                    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.15);
+                }
+                
+                .step-completed {
+                    border-color: #22c55e;
+                    background: linear-gradient(135deg, #f0fdf4 0%, #ffffff 100%);
+                }
+                
+                .step-locked {
+                    border-color: #cbd5e1;
+                    background: #f8fafc;
+                    opacity: 0.6;
+                }
+                
+                .step-error {
+                    border-color: #ef4444;
+                    background: linear-gradient(135deg, #fee2e2 0%, #ffffff 100%);
+                }
+                
+                .step-running {
+                    border-color: #f59e0b;
+                    background: linear-gradient(135deg, #fef3c7 0%, #ffffff 100%);
+                    animation: pulse-border 2s ease-in-out infinite;
+                }
+                
+                @keyframes pulse-border {
+                    0%, 100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.4); }
+                    50% { box-shadow: 0 0 0 8px rgba(245, 158, 11, 0); }
+                }
+                
+                .step-header {
+                    display: flex;
+                    align-items: center;
+                    justify-content: space-between;
+                    margin-bottom: 16px;
+                }
+                
+                .step-header h4 {
+                    margin: 0;
+                    font-size: 20px;
+                    color: #0f172a;
+                    font-weight: 700;
+                    display: flex;
+                    align-items: center;
+                    gap: 12px;
+                }
+                
+                .step-status-badge {
+                    padding: 6px 12px;
+                    border-radius: 20px;
+                    font-size: 12px;
+                    font-weight: 600;
+                    text-transform: uppercase;
+                    letter-spacing: 0.05em;
+                }
+                
+                .badge-pending {
+                    background: #f1f5f9;
+                    color: #64748b;
+                }
+                
+                .badge-running {
+                    background: #fef3c7;
+                    color: #f59e0b;
+                }
+                
+                .badge-completed {
+                    background: #dcfce7;
+                    color: #16a34a;
+                }
+                
+                .badge-error {
+                    background: #fee2e2;
+                    color: #dc2626;
+                }
+                
+                .step-markdown-section {
+                    margin: 20px 0;
+                }
+                
+                .step-markdown-section summary {
+                    cursor: pointer;
+                    font-weight: 600;
+                    padding: 12px 16px;
+                    background: #f8fafc;
+                    border-radius: 8px;
+                    border: 1px solid #e2e8f0;
+                    display: flex;
+                    align-items: center;
+                    gap: 8px;
+                    transition: all 0.2s;
+                }
+                
+                .step-markdown-section summary:hover {
+                    background: #f1f5f9;
+                    border-color: #cbd5e1;
+                }
+                
+                .step-markdown-section[open] summary {
+                    background: #eff6ff;
+                    border-color: #3b82f6;
+                    margin-bottom: 16px;
+                }
+                
+                .step-markdown-content {
+                    padding: 16px;
+                    background: white;
+                    border-radius: 8px;
+                    border: 1px solid #e2e8f0;
+                    line-height: 1.7;
+                }
+                
+                .step-markdown-content h2,
+                .step-markdown-content h3 {
+                    color: #0f172a;
+                    margin-top: 24px;
+                    margin-bottom: 12px;
+                }
+                
+                .step-markdown-content h2 {
+                    font-size: 24px;
+                    font-weight: 700;
+                }
+                
+                .step-markdown-content h3 {
+                    font-size: 18px;
+                    font-weight: 600;
+                }
+                
+                .step-markdown-content ul,
+                .step-markdown-content ol {
+                    margin-left: 20px;
+                    margin-bottom: 16px;
+                }
+                
+                .step-markdown-content li {
+                    margin-bottom: 8px;
+                }
+                
+                .step-markdown-content code {
+                    background: #f1f5f9;
+                    padding: 2px 6px;
+                    border-radius: 4px;
+                    font-family: 'Consolas', 'Monaco', monospace;
+                    font-size: 14px;
+                    color: #dc2626;
+                }
+                
+                .step-markdown-content pre {
+                    background: #1e293b;
+                    color: #e2e8f0;
+                    padding: 16px;
+                    border-radius: 8px;
+                    overflow-x: auto;
+                    margin: 16px 0;
+                }
+                
+                .step-markdown-content pre code {
+                    background: none;
+                    color: inherit;
+                    padding: 0;
+                }
+                
+                .step-commands {
+                    margin: 20px 0;
+                    padding: 16px;
+                    background: #f8fafc;
+                    border-radius: 8px;
+                    border: 1px solid #e2e8f0;
+                }
+                
+                .step-commands h5 {
+                    margin: 0 0 12px 0;
+                    font-size: 14px;
+                    color: #64748b;
+                    text-transform: uppercase;
+                    letter-spacing: 0.05em;
+                    font-weight: 600;
+                }
+                
+                .step-commands ul {
+                    list-style: none;
+                    margin: 0;
+                    padding: 0;
+                }
+                
+                .step-commands li {
+                    margin-bottom: 8px;
+                    padding: 10px 12px;
+                    background: white;
+                    border-radius: 6px;
+                    border: 1px solid #e2e8f0;
+                    font-family: 'Consolas', 'Monaco', monospace;
+                    font-size: 13px;
+                    display: flex;
+                    align-items: flex-start;
+                    gap: 8px;
+                    flex-wrap: wrap;
+                }
+                
+                .step-commands li code {
+                    color: #0f172a;
+                    white-space: pre-wrap;
+                    word-break: break-word;
+                }
+                
+                .step-commands li .collapse-note {
+                    color: #64748b;
+                    font-size: 11px;
+                    font-style: italic;
+                }
+                
+                .execute-step-button {
+                    width: 100%;
+                    padding: 14px 24px;
+                    background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+                    color: white;
+                    border: none;
+                    border-radius: 8px;
+                    font-size: 16px;
+                    font-weight: 600;
+                    cursor: pointer;
+                    transition: all 0.2s;
+                    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                    margin-top: 20px;
+                }
+                
+                .execute-step-button:hover:not(:disabled) {
+                    background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+                    box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+                    transform: translateY(-1px);
+                }
+                
+                .execute-step-button:disabled {
+                    background: #cbd5e1;
+                    cursor: not-allowed;
+                    box-shadow: none;
+                    transform: none;
+                }
+                
+                .step-output {
+                    margin-top: 20px;
+                }
+                
+                .output-container {
+                    background: #1e293b;
+                    border-radius: 8px;
+                    overflow: hidden;
+                    box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+                }
+                
+                .output-header {
+                    background: #334155;
+                    padding: 10px 16px;
+                    display: flex;
+                    align-items: flex-start;
+                    justify-content: space-between;
+                    border-bottom: 1px solid #475569;
+                    flex-wrap: wrap;
+                    gap: 8px;
+                }
+                
+                .output-header-title {
+                    color: #e2e8f0;
+                    font-size: 13px;
+                    font-weight: 600;
+                    font-family: 'Consolas', 'Monaco', monospace;
+                    white-space: pre-wrap;
+                    word-break: break-word;
+                    flex: 1;
+                }
+                
+                .output-header-toggle {
+                    cursor: pointer;
+                    color: #94a3b8;
+                    font-size: 11px;
+                    user-select: none;
+                    transition: color 0.2s;
+                }
+                
+                .output-header-toggle:hover {
+                    color: #cbd5e1;
+                }
+                
+                .command-output {
+                    background: #1e293b;
+                    color: #e2e8f0;
+                    padding: 16px;
+                    font-family: 'Consolas', 'Monaco', monospace;
+                    font-size: 13px;
+                    line-height: 1.6;
+                    overflow-x: auto;
+                    white-space: pre-wrap;
+                    word-wrap: break-word;
+                    max-height: 400px;
+                    overflow-y: auto;
+                }
+                
+                .command-output.collapsed {
+                    max-height: 60px;
+                    overflow: hidden;
+                    position: relative;
+                }
+                
+                .command-output.collapsed::after {
+                    content: '';
+                    position: absolute;
+                    bottom: 0;
+                    left: 0;
+                    right: 0;
+                    height: 30px;
+                    background: linear-gradient(transparent, #1e293b);
+                }
+                
+                .output-success {
+                    color: #86efac;
+                }
+                
+                .output-error {
+                    color: #fca5a5;
+                    background: #450a0a;
+                    padding: 16px;
+                    border-radius: 8px;
+                    border: 1px solid #991b1b;
+                }
+                
+                .step-progress-bar {
+                    margin-bottom: 30px;
+                    padding: 20px;
+                    background: white;
+                    border-radius: 12px;
+                    border: 1px solid #e2e8f0;
+                    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+                }
+                
+                .progress-bar {
+                    display: flex;
+                    gap: 8px;
+                    margin-bottom: 12px;
+                }
+                
+                .progress-segment {
+                    flex: 1;
+                    height: 8px;
+                    background: #e2e8f0;
+                    border-radius: 4px;
+                    transition: all 0.3s ease;
+                }
+                
+                .progress-segment.completed {
+                    background: linear-gradient(90deg, #22c55e 0%, #16a34a 100%);
+                }
+                
+                .progress-segment.current {
+                    background: linear-gradient(90deg, #3b82f6 0%, #2563eb 100%);
+                    animation: pulse-progress 2s ease-in-out infinite;
+                }
+                
+                @keyframes pulse-progress {
+                    0%, 100% { opacity: 1; }
+                    50% { opacity: 0.6; }
+                }
+                
+                .progress-text {
+                    text-align: center;
+                    color: #64748b;
+                    font-size: 14px;
+                    font-weight: 600;
+                }
             </style>
         </head>
         <body>
@@ -889,6 +1343,7 @@ def render_home_tab():
         dcc.Markdown(
             home_content,
             className="demo-markdown",
+            dangerously_allow_html=True,
             highlight_config={
                 "theme": "dark"
             }
@@ -897,40 +1352,26 @@ def render_home_tab():
 
 
 def render_demos_tab():
-    """Render the demos tab content."""
+    """Render the demos tab content with step-by-step execution."""
     return html.Div([
-        html.H3("Available Demos", style={"marginBottom": "20px", "color": "#0f172a"}),
+        html.H3("Interactive Demos", style={"marginBottom": "20px", "color": "#0f172a"}),
+        html.P("Learn MongoDB performance concepts through hands-on interactive demos. Execute each step at your own pace.", 
+               style={"marginBottom": "30px", "color": "#64748b"}),
         
-        # Demo list container (will be populated by callback)
+        # Demo selector
         html.Div(id="demo-list", className="demo-list"),
-        
-        # Hidden store for selected demo
         dcc.Store(id="selected-demo", data=None),
         
-        # Demo description (shown when a demo is selected)
-        html.Div(id="demo-description", className="description"),
+        # Step-by-step execution area
+        html.Div(id="demo-steps-container", children=[]),
         
-        html.Button(
-            "Run Demo",
-            id="run-button",
-            n_clicks=0,
-            disabled=True,
-            className="run-button"
-        ),
+        # Stores for tracking step execution
+        dcc.Store(id="demo-execution-state", data={}),
         
-        dcc.Loading(
-            id="loading",
-            type="default",
-            children=[
-                html.Div(id="status-message", className="status"),
-                html.Div(id="results-container", children=[]),
-            ],
-            className="loading-container"
-        ),
-        
+        # Interval for polling step execution
         dcc.Interval(
-            id="interval-component",
-            interval=500,  # Poll every 500ms for progress updates
+            id="step-poll-interval",
+            interval=500,  # Poll every 500ms
             n_intervals=0,
             disabled=True
         ),
@@ -1137,237 +1578,443 @@ def setup_callbacks(app: Dash):
         return demo_name
     
     @app.callback(
-        [Output("demo-description", "children"),
-         Output("run-button", "disabled")],
-        Input("selected-demo", "data")
+        [Output("demo-steps-container", "children"),
+         Output("demo-execution-state", "data")],
+        Input("selected-demo", "data"),
+        prevent_initial_call=False  # Need to allow initial call to clear when no demo selected
     )
-    def update_demo_info(demo_name):
-        """Display demo description when selected."""
+    def render_demo_steps(demo_name):
+        """Render step-by-step execution interface when demo is selected."""
         if not demo_name:
-            return "", True
+            return [], {}
         
         try:
-            demo = get_demo(demo_name)
-            markdown_content = demo.get_markdown_content()
+            # Clear any previous demo execution state
+            global _demo_execution_state
+            keys_to_clear = [k for k in _demo_execution_state.keys() if k.startswith("step_")]
+            for key in keys_to_clear:
+                del _demo_execution_state[key]
             
-            # Use dcc.Markdown to render the content with syntax highlighting
-            return html.Div([
-                html.Hr(style={"margin": "30px 0", "border": "none", "borderTop": "2px solid #e2e8f0"}),
-                html.H3("Demo Details", style={"marginBottom": "20px", "color": "#0f172a"}),
-                dcc.Markdown(
-                    markdown_content,
-                    className="demo-markdown",
-                    highlight_config={
-                        "theme": "dark"
-                    }
+            demo = get_demo(demo_name)
+            steps = demo.steps()
+            
+            # Initialize execution state
+            initial_state = {
+                "demo_name": demo_name,
+                "current_step": 0,
+                "total_steps": len(steps),
+                "step_results": {},
+                "running_step": None
+            }
+            
+            # Progress bar
+            progress_bar = html.Div([
+                html.Div([
+                    html.Div(
+                        className=f"progress-segment",
+                        id={"type": "progress-segment", "index": idx}
+                    ) for idx in range(len(steps))
+                ], className="progress-bar"),
+                html.Div(f"Step 0 of {len(steps)} completed", className="progress-text", id="progress-text")
+            ], className="step-progress-bar")
+            
+            step_cards = [progress_bar]
+            
+            # Render each step
+            for idx, step in enumerate(steps):
+                # Step status badge
+                badge = html.Span("Pending", className="step-status-badge badge-pending", 
+                                id={"type": "step-badge", "index": idx})
+                
+                # Markdown section (collapsible)
+                markdown_section = html.Details([
+                    html.Summary(["📖 ", html.Span("Learn about this step")]),
+                    html.Div([
+                        dcc.Markdown(step.markdown, className="step-markdown-content")
+                    ])
+                ], open=(idx == 0), className="step-markdown-section")
+                
+                # Commands list
+                command_items = []
+                for cmd_idx, cmd in enumerate(step.commands):
+                    cmd_text = cmd.raw if hasattr(cmd, 'raw') else str(cmd)
+                    cmd_type = cmd.type if hasattr(cmd, 'type') else 'shell'
+                    collapse_note = html.Span("(output collapsed)", className="collapse-note") if cmd.collapse_output else ""
+                    
+                    # Add type badge
+                    if cmd_type == "mongosh":
+                        type_icon = html.Span("🍃 mongosh: ", style={
+                            "color": "#00684a",
+                            "fontWeight": "700",
+                            "fontSize": "11px",
+                            "textTransform": "uppercase"
+                        })
+                    else:
+                        type_icon = html.Span("⚡ shell: ", style={
+                            "color": "#3b82f6",
+                            "fontWeight": "700",
+                            "fontSize": "11px",
+                            "textTransform": "uppercase"
+                        })
+                    
+                    command_items.append(
+                        html.Li([
+                            type_icon,
+                            html.Code(cmd_text),
+                            collapse_note
+                        ])
+                    )
+                
+                commands_section = html.Div([
+                    html.H5("Commands to execute:"),
+                    html.Ul(command_items)
+                ], className="step-commands")
+                
+                # Execute button
+                execute_btn = html.Button(
+                    f"▶ Execute Step {idx + 1}",
+                    id={"type": "execute-step-btn", "index": idx},
+                    n_clicks=0,  # Explicitly set to 0
+                    disabled=(idx != 0),  # Only first step enabled initially
+                    className="execute-step-button"
                 )
-            ], style={"marginTop": "20px"}), False
+                
+                # Output area (initially empty)
+                output_area = html.Div(
+                    id={"type": "step-output", "index": idx},
+                    className="step-output"
+                )
+                
+                # Build step card
+                step_card = html.Div([
+                    html.Div([
+                        html.H4([
+                            html.Span("⏸️" if idx != 0 else "▶️"),
+                            html.Span(f" Step {idx + 1}: {step.title}")
+                        ]),
+                        badge
+                    ], className="step-header"),
+                    html.P(step.description, style={"color": "#64748b", "marginBottom": "16px"}),
+                    markdown_section,
+                    commands_section,
+                    execute_btn,
+                    output_area
+                ], className=f"step-card {'step-current' if idx == 0 else 'step-locked'}", 
+                   id={"type": "step-card", "index": idx})
+                
+                step_cards.append(step_card)
+            
+            return step_cards, initial_state
+            
         except Exception as e:
-            return html.P(f"Error: {e}", className="error"), True
+            return [html.Div(f"Error loading demo: {e}", style={"color": "#ef4444"})], {}
     
     @app.callback(
-        [Output("execution-state", "data"),
-         Output("run-button", "disabled", allow_duplicate=True),
-         Output("interval-component", "disabled", allow_duplicate=True)],
-        Input("run-button", "n_clicks"),
-        [State("selected-demo", "data"),
-         State("execution-state", "data")],
+        [Output("demo-execution-state", "data", allow_duplicate=True),
+         Output("step-poll-interval", "disabled")],
+        Input({"type": "execute-step-btn", "index": ALL}, "n_clicks"),
+        [State("demo-execution-state", "data"),
+         State({"type": "execute-step-btn", "index": ALL}, "id")],
         prevent_initial_call=True
     )
-    def start_demo(n_clicks, demo_name, state):
-        """Start the demo execution in a background thread."""
-        if n_clicks == 0 or not demo_name:
-            return no_update, no_update, no_update
+    def execute_step_handler(n_clicks_list, exec_state, button_ids):
+        """Handle execute step button clicks."""
+        if not callback_context.triggered or not exec_state:
+            return no_update, no_update
         
-        # If already running, ignore
-        if _demo_execution_state["running"]:
-            return no_update, no_update, no_update
+        # Check if any button was actually clicked (not just initial render)
+        if not n_clicks_list or not any(n_clicks_list):
+            return no_update, no_update
         
-        # Start demo in background thread
-        thread = threading.Thread(target=run_demo_with_progress, args=(demo_name,), daemon=True)
+        # Determine which button was clicked
+        triggered_id = callback_context.triggered[0]["prop_id"]
+        if not triggered_id or triggered_id == "." or ".n_clicks" not in triggered_id:
+            return no_update, no_update
+        
+        button_id = json.loads(triggered_id.split(".")[0])
+        step_index = button_id["index"]
+        
+        # Verify this button actually has clicks
+        if step_index >= len(n_clicks_list) or not n_clicks_list[step_index]:
+            return no_update, no_update
+        
+        # Check if this step is already running or completed
+        if exec_state.get("running_step") is not None:
+            return no_update, no_update
+        
+        if step_index in exec_state.get("step_results", {}):
+            return no_update, no_update
+        
+        # Verify this is the current step (not a future step)
+        if step_index != exec_state.get("current_step", 0):
+            return no_update, no_update
+        
+        # Start step execution in background thread
+        demo_name = exec_state["demo_name"]
+        demo = get_demo(demo_name)
+        
+        def run_step():
+            """Execute step in background."""
+            try:
+                step, success = demo.execute_step(step_index)
+                # Store result in global state for polling callback to pick up
+                step_key = f"step_{demo_name}_{step_index}"
+                _demo_execution_state[step_key] = {
+                    "step": step.to_dict(),
+                    "success": success,
+                    "completed": True
+                }
+            except Exception as e:
+                step_key = f"step_{demo_name}_{step_index}"
+                _demo_execution_state[step_key] = {
+                    "error": str(e),
+                    "success": False,
+                    "completed": True
+                }
+        
+        thread = threading.Thread(target=run_step, daemon=True)
         thread.start()
         
-        # Enable interval polling and disable button
-        return {"running": True}, True, False
+        # Update state to show step is running
+        new_state = exec_state.copy()
+        new_state["running_step"] = step_index
+        
+        return new_state, False  # Enable polling
     
     @app.callback(
-        [Output("status-message", "children"),
-         Output("execution-state", "data", allow_duplicate=True),
-         Output("run-button", "disabled", allow_duplicate=True),
-         Output("interval-component", "disabled", allow_duplicate=True)],
-        Input("interval-component", "n_intervals"),
-        State("execution-state", "data"),
+        [Output({"type": "step-output", "index": MATCH}, "children"),
+         Output({"type": "step-card", "index": MATCH}, "className"),
+         Output({"type": "step-badge", "index": MATCH}, "children"),
+         Output({"type": "step-badge", "index": MATCH}, "className"),
+         Output({"type": "execute-step-btn", "index": MATCH}, "disabled"),
+         Output("demo-execution-state", "data", allow_duplicate=True),
+         Output({"type": "progress-segment", "index": MATCH}, "className"),
+         Output("progress-text", "children"),
+         Output("step-poll-interval", "disabled", allow_duplicate=True)],
+        [Input("step-poll-interval", "n_intervals"),
+         Input({"type": "step-output", "index": MATCH}, "id")],
+        [State("demo-execution-state", "data"),
+         State({"type": "step-card", "index": MATCH}, "id")],
         prevent_initial_call=True
     )
-    def update_progress(n_intervals, state):
-        """Poll for demo progress and update UI."""
-        global _demo_execution_state
+    def update_step_execution(n_intervals, output_id, exec_state, card_id):
+        """Poll for step execution completion and update UI."""
+        step_index = output_id["index"]
         
-        # Create hash of current state to detect changes
-        import hashlib
-        import json
+        # Only update if this step is currently running
+        if not exec_state or exec_state.get("running_step") != step_index:
+            return no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update
         
-        state_data = {
-            "running": _demo_execution_state["running"],
-            "current_step": _demo_execution_state["current_step"],
-            "completed_steps": len(_demo_execution_state["completed_steps"]),
-            "has_result": _demo_execution_state["result"] is not None,
-            "has_error": _demo_execution_state["error"] is not None
-        }
-        current_hash = hashlib.md5(json.dumps(state_data, sort_keys=True).encode()).hexdigest()
+        demo_name = exec_state.get("demo_name")
+        if not demo_name:
+            return no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update
         
-        # If state hasn't changed, don't update anything
-        if current_hash == _demo_execution_state["_last_hash"]:
-            return no_update, no_update, no_update, no_update
+        step_key = f"step_{demo_name}_{step_index}"
         
-        # Update the hash
-        _demo_execution_state["_last_hash"] = current_hash
+        # Check if step has completed
+        if step_key not in _demo_execution_state:
+            # Still running - don't update UI yet
+            return no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update
         
-        # Check if demo is still running
-        if not _demo_execution_state["running"]:
-            # Demo completed - check for result or error
-            if _demo_execution_state["error"]:
-                status = html.Span(
-                    f"❌ Demo failed: {_demo_execution_state['error']}",
-                    className="status-error"
-                )
-                return status, {"running": False, "result": None}, False, True
-            
-            elif _demo_execution_state["result"]:
-                result = _demo_execution_state["result"]
-                if result.get("success"):
-                    status = html.Span("✅ Demo completed successfully!", className="status-success")
-                else:
-                    status = html.Span(
-                        f"❌ Demo failed: {result.get('error', 'Unknown error')}",
-                        className="status-error"
-                    )
-                return status, {"running": False, "result": result}, False, True
-            
-            # Demo finished but no result yet (shouldn't happen)
-            return no_update, no_update, no_update, no_update
+        step_result = _demo_execution_state.pop(step_key)  # Remove from global state
         
-        # Demo is running - show progress
-        current_step = _demo_execution_state["current_step"]
-        completed_steps = _demo_execution_state["completed_steps"]
+        if not step_result.get("completed"):
+            return no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update
         
-        # Build progress display with nice styling
-        if completed_steps or current_step:
-            step_list = []
-            
-            # Show completed steps
-            for step in completed_steps:
-                step_list.append(
-                    html.Div([
-                        html.Span("✅", className="step-icon"),
-                        html.Span(step["description"], className="step-text step-text-completed")
-                    ], className="step-item")
-                )
-            
-            # Show current step with animation
-            if current_step:
-                step_list.append(
-                    html.Div([
-                        html.Span("⏳", className="step-icon"),
-                        html.Span(current_step, className="step-text step-text-running")
-                    ], className="step-item step-item-running")
-                )
-            
-            status = html.Div([
-                html.Div("Demo in progress", className="status-running", style={"marginBottom": "12px"}),
-                html.Div(step_list, className="step-progress")
-            ])
+        # Build output display
+        output_components = []
+        
+        if step_result.get("error"):
+            # Error occurred
+            output_components.append(
+                html.Div([
+                    html.Div("❌ Error executing step", style={"fontWeight": "600", "marginBottom": "8px", "color": "#ef4444"}),
+                    html.Pre(step_result["error"], className="output-error")
+                ])
+            )
+            card_class = "step-card step-error"
+            badge_text = "Error"
+            badge_class = "step-status-badge badge-error"
         else:
-            status = html.Div([
-                html.Span("⏳ Starting demo... ", className="status-running"),
-                html.Span("This may take 1-2 minutes.", className="status-detail")
-            ])
-        
-        # Only update button and interval states when transitioning
-        return status, no_update, no_update, no_update
-    
-    @app.callback(
-        Output("results-container", "children"),
-        Input("execution-state", "data")
-    )
-    def display_results(state):
-        """Render results visualization when demo completes."""
-        result = state.get("result")
-        if not result or not result.get("success"):
-            return html.Div()
-        
-        steps = result.get("steps", [])
-        
-        # Find baseline and optimized benchmarks
-        baseline = None
-        optimized = None
-        
-        for step in steps:
-            if "baseline" in step["name"].lower() and step.get("result"):
-                baseline = step["result"]
-            elif ("indexed" in step["name"].lower() or 
-                  "index" in step["name"].lower() and 
-                  "benchmark" in step["name"].lower()) and step.get("result"):
-                optimized = step["result"]
-        
-        # Find comparison results
-        comparison = None
-        for step in steps:
-            if step["name"] == "compare" and step.get("result"):
-                comparison = step["result"]
-        
-        if not baseline or not optimized:
-            return html.Div("No benchmark data found in results")
-        
-        # Extract what changed from steps
-        changes = extract_changes(steps)
-        
-        # Create visualizations
-        summary = create_summary_box(baseline, optimized, comparison, changes)
-        changes_display = create_changes_display(changes)
-        timeline = create_timeline(steps)
-        
-        return html.Div([
-            html.H2("📊 Results", className="results-title"),
+            # Success
+            step_data = step_result["step"]
             
-            # Summary box at top
-            summary,
-            
-            # What changed section
-            html.Div([
-                html.H3("🔧 What Changed", className="section-title"),
-                changes_display,
-            ], className="section"),
-            
-            # View detailed comparison button
-            html.Div([
-                html.Button(
-                    "📊 View Detailed Comparison in Results Tab",
-                    id={"type": "view-comparison", "baseline": baseline['id'], "optimized": optimized['id']},
-                    n_clicks=0,
-                    style={
-                        "padding": "12px 24px",
-                        "backgroundColor": "#3b82f6",
+            # Render each command output
+            for cmd_idx, output in enumerate(step_data.get("outputs", [])):
+                cmd = step_data["commands"][cmd_idx]
+                is_collapsed = cmd.get("collapse_output", False)
+                cmd_text = cmd.get("command", f"Command {cmd_idx + 1}")
+                cmd_type = cmd.get("type", "shell")
+                
+                # Extract stdout and stderr from output dict
+                stdout = output.get("stdout", "")
+                stderr = output.get("stderr", "")
+                exit_code = output.get("exit_code", 0)
+                
+                # Combine stdout and stderr for display
+                combined_output = ""
+                if stdout:
+                    combined_output += stdout
+                if stderr:
+                    if combined_output:
+                        combined_output += "\n\n"
+                    combined_output += f"[stderr]\n{stderr}"
+                
+                if not combined_output:
+                    combined_output = f"[Command exited with code {exit_code}]"
+                
+                # Build output element
+                if is_collapsed:
+                    output_element = html.Details([
+                        html.Summary("Click to expand output"),
+                        html.Pre(combined_output, className="command-output")
+                    ], open=False)
+                else:
+                    output_element = html.Pre(combined_output, className="command-output")
+                
+                # Show command type badge and appropriate icon
+                if cmd_type == "mongosh":
+                    type_badge = html.Span([
+                        html.Span("🍃 ", style={"marginRight": "4px"}),
+                        "mongosh"
+                    ], style={
+                        "display": "inline-block",
+                        "padding": "2px 8px",
+                        "background": "#00684a",
                         "color": "white",
-                        "border": "none",
-                        "borderRadius": "8px",
-                        "cursor": "pointer",
-                        "fontSize": "16px",
+                        "borderRadius": "4px",
+                        "fontSize": "11px",
                         "fontWeight": "600",
-                        "boxShadow": "0 2px 4px rgba(0,0,0,0.1)",
-                        "transition": "all 0.2s",
-                        "width": "100%",
-                        "marginTop": "20px",
-                        "marginBottom": "20px"
-                    }
-                ),
-            ], style={"textAlign": "center"}),
+                        "marginRight": "8px",
+                        "textTransform": "uppercase",
+                        "letterSpacing": "0.05em"
+                    })
+                    cmd_display = f"$ mongosh --quiet\n{cmd_text}"
+                else:
+                    type_badge = html.Span([
+                        html.Span("⚡ ", style={"marginRight": "4px"}),
+                        "shell"
+                    ], style={
+                        "display": "inline-block",
+                        "padding": "2px 8px",
+                        "background": "#3b82f6",
+                        "color": "white",
+                        "borderRadius": "4px",
+                        "fontSize": "11px",
+                        "fontWeight": "600",
+                        "marginRight": "8px",
+                        "textTransform": "uppercase",
+                        "letterSpacing": "0.05em"
+                    })
+                    cmd_display = f"$ {cmd_text}"
+                
+                output_div = html.Div([
+                    html.Div([
+                        type_badge,
+                        html.Span(cmd_display, className="output-header-title")
+                    ], className="output-header"),
+                    output_element
+                ], className="output-container", style={"marginBottom": "12px"})
+                
+                output_components.append(output_div)
             
-            html.Div([
-                html.H3("Execution Timeline", className="section-title"),
-                timeline,
-            ], className="section"),
-        ], className="results")
+            card_class = "step-card step-completed"
+            badge_text = "Completed"
+            badge_class = "step-status-badge badge-completed"
+        
+        # Update execution state
+        new_state = exec_state.copy()
+        new_state["running_step"] = None
+        new_state.setdefault("step_results", {})[step_index] = step_result
+        new_state["current_step"] = step_index + 1
+        
+        # Update progress text
+        completed = step_index + 1
+        total = new_state["total_steps"]
+        progress_text = f"Step {completed} of {total} completed"
+        
+        # Determine if we should disable polling
+        disable_polling = True  # Will be re-enabled when next step is clicked
+        
+        return (
+            output_components,
+            card_class,
+            badge_text,
+            badge_class,
+            True,  # Disable this step's button
+            new_state,
+            "progress-segment completed",
+            progress_text,
+            disable_polling
+        )
+    
+    # Enable next step button after current step completes
+    @app.callback(
+        Output({"type": "execute-step-btn", "index": ALL}, "disabled"),
+        [Input("demo-execution-state", "data"),
+         Input({"type": "execute-step-btn", "index": ALL}, "id")]
+    )
+    def update_step_buttons(exec_state, button_ids):
+        """Enable/disable step buttons based on execution state."""
+        if not exec_state or not button_ids:
+            return [no_update] * len(button_ids)
+        
+        current_step = exec_state.get("current_step", 0)
+        running_step = exec_state.get("running_step")
+        step_results = exec_state.get("step_results", {})
+        
+        disabled_states = []
+        for button_id in button_ids:
+            step_index = button_id["index"]
+            
+            # Disable if:
+            # 1. Already completed
+            # 2. A step is currently running
+            # 3. Not the current step
+            if step_index in step_results:
+                disabled_states.append(True)
+            elif running_step is not None:
+                disabled_states.append(True)
+            elif step_index != current_step:
+                disabled_states.append(True)
+            else:
+                disabled_states.append(False)
+        
+        return disabled_states
+    
+    # Update step cards styling based on progress
+    @app.callback(
+        Output({"type": "step-card", "index": ALL}, "className"),
+        [Input("demo-execution-state", "data"),
+         Input({"type": "step-card", "index": ALL}, "id")],
+        prevent_initial_call=True
+    )
+    def update_step_cards_styling(exec_state, card_ids):
+        """Update step card styling based on execution state."""
+        if not exec_state or not card_ids:
+            return [no_update] * len(card_ids)
+        
+        current_step = exec_state.get("current_step", 0)
+        running_step = exec_state.get("running_step")
+        step_results = exec_state.get("step_results", {})
+        
+        class_names = []
+        for card_id in card_ids:
+            step_index = card_id["index"]
+            
+            if step_index in step_results:
+                if step_results[step_index].get("error"):
+                    class_names.append("step-card step-error")
+                else:
+                    class_names.append("step-card step-completed")
+            elif step_index == running_step:
+                class_names.append("step-card step-running")
+            elif step_index == current_step:
+                class_names.append("step-card step-current")
+            else:
+                class_names.append("step-card step-locked")
+        
+        return class_names
     
     # Benchmark tab callbacks
     @app.callback(
@@ -1858,19 +2505,19 @@ def extract_changes(steps: list) -> list:
     changes = []
     
     for step in steps:
-        if "load" in step["name"].lower():
+        if "load" in step["id"].lower():
             if step.get("result") and "records" in step["result"]:
                 changes.append({
                     "step": "Data Preparation",
                     "detail": f"Loaded {step['result']['records']:,} test records into MongoDB"
                 })
-        elif "create" in step["name"].lower() and "index" in step["name"].lower():
+        elif "create" in step["id"].lower() and "index" in step["id"].lower():
             if step.get("result") and "index" in step["result"]:
                 changes.append({
                     "step": "Index Creation",
                     "detail": f"Created index: {step['result']['index']}"
                 })
-        elif "drop" in step["name"].lower() and "index" in step["name"].lower():
+        elif "drop" in step["id"].lower() and "index" in step["id"].lower():
             changes.append({
                 "step": "Index Removal",
                 "detail": step.get("description", "Dropped indexes")

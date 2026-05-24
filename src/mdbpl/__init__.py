@@ -11,7 +11,7 @@ from .workloads import (
     create_read_heavy_benchmark,
     create_balanced_benchmark,
     create_write_heavy_benchmark,
-    create_range_scan_benchmark,
+    create_range_scan_benchmark
 )
 
 __all__ = [

@@ -1,188 +1,255 @@
 """Index Performance Demo - Shows dramatic read improvement with proper indexing."""
 
-from datetime import datetime
-from pymongo import MongoClient
-import os
-
-from .base import Demo, DemoStep, DemoResult
-from ..ycsb import load_ycsb_data
-from ..workloads import create_range_scan_benchmark
-from ..executor import WorkloadExecutor
-from ..storage import BenchmarkStorage
+from typing import List
+from .base import Demo, DemoStep, ShellCommand, MongoshCommand
 
 
 class IndexPerformanceDemo(Demo):
     """
     Demonstrates the dramatic performance improvement when adding an index.
     
-    Shows a range query workload that performs poorly without an index,
-    then adds a single index and re-runs to show 10x+ improvement.
+    Uses a range-scan workload that queries by numeric score field with sorting.
+    Without an index, this requires a full collection scan and in-memory sort.
+    With an index on score, MongoDB can use an index scan which is 10-100x faster.
     """
     
-    name = "index-performance"
+    id = "index-performance"
     title = "Index Performance Impact"
     description = "Demonstrates dramatic read performance improvement with proper indexing"
-    markdown_file = "index-performance.md"
+    markdown_file = ""  # Using inline markdown instead
     
-    def __init__(self):
-        self.mongodb_uri = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
-        self.client = MongoClient(self.mongodb_uri)
-        self.db = self.client["perflab"]
-        self.collection = self.db["usertable"]
-        self.storage = BenchmarkStorage()
-    
-    def run(self) -> DemoResult:
-        """Execute the demo."""
-        result = DemoResult(
-            demo_name=self.name,
-            title=self.title,
-            started_at=datetime.now()
-        )
-        
-        try:
-            # Step 1: Load data
-            step1 = DemoStep(
-                name="load_data",
-                description="Loading 10,000 test records",
-                started_at=datetime.now()
+    def steps(self) -> List[DemoStep]:
+        """Define the demo steps."""
+        return [
+            DemoStep(
+                id="init",
+                title="Initialize Test Dataset",
+                description="Load 10,000 YCSB documents and add numeric score field for range queries",
+                markdown="""
+## Step 1: Initialize Test Data
+
+We'll start by loading 10,000 test documents using the YCSB (Yahoo Cloud Serving Benchmark) dataset. 
+
+YCSB generates realistic documents with 10 random fields (`field0` through `field9`), each containing 100-character random strings. This simulates real-world data like user profiles or product catalogs.
+
+After loading the data, we'll add a **numeric `score` field** to each document. This field will range from 0-9999 and allows us to test range queries - a common pattern where you query for values within a range (e.g., "find all products with price between $50-$100").
+
+### Why a numeric field?
+
+Range queries on numeric fields are a classic use case for indexes. Without an index, MongoDB must:
+1. Scan **every document** in the collection
+2. Check if each document's score falls within the range
+3. Sort the results in memory (expensive!)
+
+With an index, MongoDB can jump directly to the start of the range and efficiently traverse the sorted index.
+
+### Commands executed:
+- `mdbpl init --scale 10k` - Loads 10,000 YCSB documents
+- `mongosh` script - Adds sequential score field (0-9999) to all documents
+""",
+                commands=[
+                    ShellCommand("mdbpl init --scale 10k", collapse_output=True),
+                    MongoshCommand("""
+use perflab
+// Add a numeric 'score' field to all documents for range query testing
+// This simulates real-world scenarios like user ratings, product prices, timestamps, etc.
+var count = 0;
+db.usertable.find().forEach(function(doc) {
+    db.usertable.updateOne(
+        {_id: doc._id},
+        {$set: {score: count++}}
+    );
+});
+print("✓ Added score field to " + count + " documents");
+""", collapse_output=True)
+                ]
+            ),
+            
+            DemoStep(
+                id="baseline",
+                title="Baseline Performance (No Index)",
+                description="Run range scans on numeric score field without an index",
+                markdown="""
+## Step 2: Baseline Performance Test
+
+Now we'll run a benchmark workload **without any index on the score field** to establish our baseline performance.
+
+### The Workload
+
+The `range-scan` workload performs:
+- **80% range queries** on the score field (e.g., `{score: {$gte: 3000, $lt: 5000}}`)
+- Each query sorts by score and returns 100 documents
+- **20% point reads** by `_id` (already indexed)
+
+### What MongoDB Must Do (Without Index)
+
+For each range query, MongoDB performs a **COLLSCAN** (collection scan):
+1. **Reads every single document** in the collection (10,000 documents)
+2. Checks if each document's score falls within the range
+3. Collects all matching documents (~2,000 matches for a 2,000-value range)
+4. **Sorts the results in memory** (expensive!)
+5. Returns the first 100 after sorting
+
+This is **very slow** because:
+- Full collection scan touches every document
+- In-memory sort of ~2,000 documents per query
+- No way to skip non-matching documents
+
+### Expected Results
+
+Watch for:
+- Low throughput (operations per second)
+- High latency (milliseconds per operation)
+- **collection_scans** metric will be high
+- **index_scans** will be 0 (except for _id lookups)
+
+Let's see how slow it is...
+""",
+                commands=[
+                    ShellCommand("mdbpl run --workload range-scan --duration 15s --tag baseline")
+                ]
+            ),
+            
+            DemoStep(
+                id="create-index",
+                title="Create Index on Score Field",
+                description="Create a single-field ascending index on the score field",
+                markdown="""
+## Step 3: Create an Index
+
+Now we'll create a simple **single-field index** on the score field:
+
+```javascript
+db.usertable.createIndex({score: 1})
+```
+
+### What This Does
+
+MongoDB creates a **B-tree index** structure that:
+1. **Stores score values in sorted order**
+2. Includes pointers to the actual documents
+3. Allows **O(log n)** lookups instead of **O(n)** scans
+4. Enables efficient range traversal
+
+### How Indexes Work
+
+Think of it like a phone book:
+- **Without index**: Like searching for all people with birthdays in January by reading every single page
+- **With index**: Like having a separate "Birthday Index" where you can jump directly to January entries
+
+### Storage Cost
+
+The index will consume additional disk space (~200KB for 10,000 documents), but the performance gain is worth it for read-heavy workloads.
+
+### What Changes for Queries
+
+After creating this index, queries like `{score: {$gte: 3000, $lt: 5000}}` will:
+1. **Use an index scan (IXSCAN)** instead of collection scan
+2. Jump directly to score=3000 in the index
+3. Traverse the index sequentially (already sorted!)
+4. Stop at score=5000
+5. No in-memory sorting needed
+
+Let's create it...
+""",
+                commands=[
+                    MongoshCommand("""
+use perflab
+db.usertable.createIndex({score: 1})
+print("✓ Index created successfully on score field")
+db.usertable.getIndexes().forEach(function(idx) {
+    print("  - " + idx.name + ": " + JSON.stringify(idx.key));
+});
+""")
+                ]
+            ),
+            
+            DemoStep(
+                id="with-index",
+                title="Performance With Index",
+                description="Re-run the same range-scan workload with the index in place",
+                markdown="""
+## Step 4: Performance Test With Index
+
+Now we'll run the **exact same workload** again, but this time MongoDB will use our new index on the score field.
+
+### What MongoDB Does Now (With Index)
+
+For each range query, MongoDB performs an **IXSCAN** (index scan):
+1. **Jumps directly** to score=3000 in the sorted index (O(log n) lookup)
+2. **Traverses the index** sequentially reading entries in score order
+3. Stops at score=5000
+4. Returns first 100 documents (already sorted!)
+5. **No in-memory sort needed!**
+
+### Why This is Fast
+
+- **Skips non-matching documents** entirely
+- Only reads ~100 documents instead of 10,000
+- Results are already in sorted order
+- Uses efficient B-tree structure
+
+### Expected Improvements
+
+Watch for dramatic improvements:
+- **10-100x higher throughput** (operations per second)
+- **90%+ lower latency** (milliseconds per operation)
+- **index_scans** metric will be high
+- **collection_scans** will be near zero
+- **docs_examined** will be much lower
+
+Let's see the improvement...
+""",
+                commands=[
+                    ShellCommand("mdbpl run --workload range-scan --duration 15s --tag with-index")
+                ]
+            ),
+            
+            DemoStep(
+                id="compare",
+                title="Compare Results",
+                description="Display side-by-side comparison of baseline vs indexed performance",
+                markdown="""
+## Step 5: Compare the Results
+
+Now let's see the before and after comparison! The `mdbpl compare` command will show us:
+
+### Key Metrics to Watch
+
+**Throughput (ops/sec)**
+- Baseline: ~50-100 ops/sec (slow!)
+- With Index: ~5,000-10,000 ops/sec (fast!)
+- **Expected: 50-100x improvement** 🚀
+
+**Latency (milliseconds)**
+- Baseline: ~20-50ms per operation
+- With Index: ~0.2-1ms per operation
+- **Expected: 95%+ reduction** ⚡
+
+**Query Execution**
+- Baseline: COLLSCAN + in-memory sort
+- With Index: IXSCAN + index traversal
+- **Expected: Massive reduction in docs_examined**
+
+### Why Such a Big Difference?
+
+The improvement comes from:
+1. **Avoiding full collection scans** (10,000 docs → 100 docs)
+2. **No in-memory sorting** (pre-sorted in index)
+3. **Efficient B-tree lookups** (O(log n) instead of O(n))
+
+### Real-World Impact
+
+This demonstrates why **indexes are critical** for:
+- Range queries on numeric/date fields
+- Sorting operations
+- Queries with high selectivity
+- Read-heavy workloads
+
+The performance difference you're about to see is why database indexing is one of the most important optimization techniques!
+""",
+                commands=[
+                    ShellCommand("mdbpl compare --tags baseline,with-index")
+                ]
             )
-            load_ycsb_data(
-                mongodb_uri=self.mongodb_uri,
-                record_count=10000,
-                drop_existing=True
-            )
-            
-            # Add sortable numeric field for range queries
-            # YCSB creates binary fields which don't work with range scans
-            count = self.collection.count_documents({})
-            for i, doc in enumerate(self.collection.find({}, {"_id": 1})):
-                self.collection.update_one(
-                    {"_id": doc["_id"]},
-                    {"$set": {"score": i}}
-                )
-            
-            step1.completed_at = datetime.now()
-            step1.result = {"records": count, "note": "Added 'score' field for range queries"}
-            result.steps.append(step1)
-            
-            # Step 2: Baseline benchmark (no index)
-            step2 = DemoStep(
-                name="baseline_benchmark",
-                description="Running range scan workload WITHOUT index",
-                started_at=datetime.now()
-            )
-            
-            # Drop any existing indexes (except _id) to ensure clean baseline
-            self.collection.drop_indexes()
-            
-            # Create Python benchmark using range-scan workload
-            benchmark = create_range_scan_benchmark(record_count=10000)
-            executor = WorkloadExecutor(
-                workload=benchmark,
-                mongodb_uri=self.mongodb_uri,
-                record_count=10000
-            )
-            
-            baseline_result = executor.run(
-                duration_seconds=15,
-                tag="no-index"
-            )
-            
-            baseline_id = self.storage.save_result(baseline_result, tag="no-index")
-            step2.completed_at = datetime.now()
-            step2.result = {
-                "id": baseline_id,
-                "workload_name": baseline_result.workload_name,
-                "tag": "no-index",
-                "throughput": baseline_result.operations_per_second,
-                "operations_per_second": baseline_result.operations_per_second,
-                "latency_p50": baseline_result.latency_p50,
-                "latency_p95": baseline_result.latency_p95,
-                "latency_p99": baseline_result.latency_p99,
-                "total_operations": baseline_result.total_operations,
-                "total_docs_examined": baseline_result.total_docs_examined,
-                "total_docs_returned": baseline_result.total_docs_returned,
-                "index_scans": baseline_result.index_scans,
-                "collection_scans": baseline_result.collection_scans,
-            }
-            result.steps.append(step2)
-            
-            # Step 3: Create index
-            step3 = DemoStep(
-                name="create_index",
-                description="Creating index on score field",
-                started_at=datetime.now()
-            )
-            
-            self.collection.create_index("score")
-            step3.completed_at = datetime.now()
-            step3.result = {"index": "score_1"}
-            result.steps.append(step3)
-            
-            # Step 4: Benchmark with index
-            step4 = DemoStep(
-                name="indexed_benchmark",
-                description="Running same workload WITH index",
-                started_at=datetime.now()
-            )
-            
-            indexed_result = executor.run(
-                duration_seconds=15,
-                tag="with-index"
-            )
-            
-            indexed_id = self.storage.save_result(indexed_result, tag="with-index")
-            step4.completed_at = datetime.now()
-            step4.result = {
-                "id": indexed_id,
-                "workload_name": indexed_result.workload_name,
-                "tag": "with-index",
-                "throughput": indexed_result.operations_per_second,
-                "operations_per_second": indexed_result.operations_per_second,
-                "latency_p50": indexed_result.latency_p50,
-                "latency_p95": indexed_result.latency_p95,
-                "latency_p99": indexed_result.latency_p99,
-                "total_operations": indexed_result.total_operations,
-                "total_docs_examined": indexed_result.total_docs_examined,
-                "total_docs_returned": indexed_result.total_docs_returned,
-                "index_scans": indexed_result.index_scans,
-                "collection_scans": indexed_result.collection_scans,
-            }
-            result.steps.append(step4)
-            
-            # Step 5: Compare results
-            step5 = DemoStep(
-                name="compare",
-                description="Comparing results",
-                started_at=datetime.now()
-            )
-            
-            throughput_improvement = (
-                (indexed_result.operations_per_second - baseline_result.operations_per_second) 
-                / baseline_result.operations_per_second * 100
-            )
-            latency_improvement = (
-                (baseline_result.latency_p95 - indexed_result.latency_p95)
-                / baseline_result.latency_p95 * 100
-            )
-            
-            step5.completed_at = datetime.now()
-            step5.result = {
-                "baseline": step2.result,
-                "indexed": step4.result,
-                "improvements": {
-                    "throughput_percent": round(throughput_improvement, 2),
-                    "latency_p95_percent": round(latency_improvement, 2),
-                }
-            }
-            result.steps.append(step5)
-            
-            result.completed_at = datetime.now()
-            result.success = True
-            
-        except Exception as e:
-            result.completed_at = datetime.now()
-            result.success = False
-            result.error = str(e)
-        
-        return result
+        ]

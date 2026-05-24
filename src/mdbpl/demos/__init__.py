@@ -1,12 +1,16 @@
 """Demo modules for MongoDB Performance Lab."""
 
-from .base import Demo, DemoStep
+from .base import Demo, DemoStep, Command, ShellCommand, MongoshCommand, CommandExecutor
 from .index_performance import IndexPerformanceDemo
 from .overindexing import OverindexingDemo
 
 __all__ = [
     "Demo",
     "DemoStep",
+    "Command",
+    "ShellCommand",
+    "MongoshCommand",
+    "CommandExecutor",
     "IndexPerformanceDemo",
     "OverindexingDemo",
 ]
@@ -29,7 +33,8 @@ def list_demos() -> list[dict]:
     """List all available demos with metadata."""
     return [
         {
-            "name": demo_class.name,
+            "name": demo_class.id,  # Use id, not name (name is a property)
+            "id": demo_class.id,
             "title": demo_class.title,
             "description": demo_class.description,
         }

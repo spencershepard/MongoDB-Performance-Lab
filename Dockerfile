@@ -10,6 +10,16 @@ RUN apt-get update && apt-get install -y \
     default-jre-headless \
     && rm -rf /var/lib/apt/lists/*
 
+# Install MongoDB Shell (mongosh) - download standalone binary
+ENV MONGOSH_VERSION=2.1.1
+RUN wget -q https://downloads.mongodb.com/compass/mongosh-${MONGOSH_VERSION}-linux-x64.tgz && \
+    tar -xzf mongosh-${MONGOSH_VERSION}-linux-x64.tgz && \
+    mv mongosh-${MONGOSH_VERSION}-linux-x64/bin/mongosh /usr/local/bin/ && \
+    mv mongosh-${MONGOSH_VERSION}-linux-x64/bin/mongosh_crypt_v1.so /usr/local/lib/ || true && \
+    chmod +x /usr/local/bin/mongosh && \
+    rm -rf mongosh-${MONGOSH_VERSION}-linux-x64* && \
+    mongosh --version
+
 # Install YCSB
 ENV YCSB_VERSION=0.17.0
 RUN wget -q https://github.com/brianfrankcooper/YCSB/releases/download/${YCSB_VERSION}/ycsb-${YCSB_VERSION}.tar.gz && \
@@ -36,4 +46,4 @@ RUN mkdir -p /data
 EXPOSE 8080
 
 # Default command (can be overridden in docker-compose)
-CMD ["mdbpl", "serve", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["mdbpl", "serve", "--host", "0.0.0.0", "--port", "8888"]

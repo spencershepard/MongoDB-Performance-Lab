@@ -19,8 +19,8 @@ def cli():
 @click.option('--distribution', default='zipfian', help='Key distribution (zipfian, uniform, latest)')
 @click.option('--fields', default=10, help='Number of fields per document')
 @click.option('--field-length', default=100, help='Length of each field value')
-@click.option('--drop', is_flag=True, help='Drop existing collection before loading')
-def init(dataset, scale, distribution, fields, field_length, drop):
+@click.option('--no-drop', is_flag=True, help='Keep existing collection (default: drops collection)')
+def init(dataset, scale, distribution, fields, field_length, no_drop):
     """Initialize dataset using YCSB."""
     if dataset != 'ycsb':
         click.echo(f"Error: Only 'ycsb' dataset is currently supported", err=True)
@@ -39,13 +39,14 @@ def init(dataset, scale, distribution, fields, field_length, drop):
             click.echo(f"Error: Invalid scale '{scale}'. Use format like '100k', '1M', or raw number", err=True)
             raise click.Abort()
     
+    drop = not no_drop  # Drop by default unless --no-drop is specified
+    
     click.echo(f"Initializing YCSB dataset:")
     click.echo(f"  Records: {record_count:,}")
     click.echo(f"  Distribution: {distribution}")
     click.echo(f"  Fields: {fields}")
     click.echo(f"  Field length: {field_length}")
-    if drop:
-        click.echo(f"  Drop existing: yes")
+    click.echo(f"  Drop existing: {'no' if no_drop else 'yes'}")
     click.echo()
     
     from mdbpl.ycsb import load_ycsb_data
@@ -516,7 +517,7 @@ def demo_run(demo_name, output):
 
 @cli.command()
 @click.option('--host', default='0.0.0.0', help='Host to bind to')
-@click.option('--port', default=8080, help='Port to bind to')
+@click.option('--port', default=8888, help='Port to bind to')
 def serve(host, port):
     """Start the API server."""
     click.echo(f"Starting API server on {host}:{port}...")
