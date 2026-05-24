@@ -2084,10 +2084,10 @@ def setup_callbacks(app: Dash):
             step_data = step_result["step"]
             for output in step_data.get("outputs", []):
                 stdout = output.get("stdout", "")
-                # Look for "Run ID: <id>" patterns - run IDs are integers
+                # Look for "run_id: <number>" patterns (lowercase) - run IDs are integers
                 import re
-                # Look for "Run ID: <number>"
-                run_id_match = re.search(r'Run ID:\s+(\d+)', stdout, re.IGNORECASE)
+                # Look for "run_id: <number>" (case-insensitive)
+                run_id_match = re.search(r'run_id:\s+(\d+)', stdout, re.IGNORECASE)
                 
                 if run_id_match:
                     run_id = int(run_id_match.group(1))  # Convert to int for storage lookup
