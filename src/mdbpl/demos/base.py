@@ -148,6 +148,7 @@ class CommandExecutor:
             cmd = [
                 'mongosh',
                 uri,
+                '--quiet',
                 '--file', script_path
             ]
             

@@ -51,40 +51,26 @@ With larger datasets:
 - Index benefits become dramatic (O(log n) vs O(n) matters more)
 
 ### Commands executed:
-- `mdbpl init --scale 100k` - Loads 100,000 YCSB documents (~50MB of data)
-- `mongosh` script - Adds sequential score field (0-99999) to all documents
+- `mdbpl init --scale 10k` - Loads 10,000 YCSB documents (~5MB of data)
+- `mongosh` script - Adds sequential score field (0-9999) to all documents
 """,
                 commands=[
-                    ShellCommand("mdbpl init --scale 100k", collapse_output=True),
+                    ShellCommand("mdbpl init --scale 10k", collapse_output=False),
                     MongoshCommand("""
-print("Adding score field to documents...");
 var count = 0;
 var batch = [];
-var cursor = db.usertable.find();
-while (cursor.hasNext()) {
-    var doc = cursor.next();
-    batch.push({
-        updateOne: {
-            filter: {_id: doc._id},
-            update: {$set: {score: count++}}
-        }
-    });
+db.usertable.find().forEach(function(doc) {
+    batch.push({updateOne: {filter: {_id: doc._id}, update: {$set: {score: count++}}}});
     if (batch.length >= 1000) {
         db.usertable.bulkWrite(batch);
         batch = [];
-        if (count % 10000 === 0) {
-            print("  Processed " + count + " documents...");
-        }
     }
-}
-if (batch.length > 0) {
-    db.usertable.bulkWrite(batch);
-}
-print("✓ Successfully added score field to " + count + " documents");
-print("");
-print("Sample document:");
-printjson(db.usertable.findOne({}, {_id: 1, score: 1, field0: 1}));
-""", collapse_output=True)
+});
+if (batch.length > 0) db.usertable.bulkWrite(batch);
+
+print("✓ Added score field to 10,000 documents");
+print("Sample: " + JSON.stringify(db.usertable.findOne({}, {_id: 1, score: 1})));
+""", collapse_output=False)
                 ]
             ),
             
@@ -178,41 +164,13 @@ Let's create it...
 """,
                 commands=[
                     MongoshCommand("""
-try {
-    var result = db.usertable.createIndex({score: 1});
-    print("✓ Index created successfully on score field");
-    print("  Result: " + JSON.stringify(result));
-} catch (e) {
-    print("Note: Index may already exist - " + e.message);
-}
-
+db.usertable.createIndex({score: 1});
+print("✓ Index created on score field");
 print("");
-print("Current indexes:");
-var indexes = db.usertable.getIndexes();
-indexes.forEach(function(idx) {
-    print("  - " + idx.name + ": " + JSON.stringify(idx.key));
+print("Indexes:");
+db.usertable.getIndexes().forEach(function(idx) {
+    print("  " + idx.name + ": " + JSON.stringify(idx.key));
 });
-
-print("");
-print("Verifying index usage with explain():");
-try {
-    var explainResult = db.usertable.find({score: {$gte: 5000, $lt: 7000}}).sort({score: 1}).limit(100).explain("executionStats");
-    var stage = explainResult.executionStats.executionStages.stage;
-    var docsExamined = explainResult.executionStats.totalDocsExamined;
-    var docsReturned = explainResult.executionStats.nReturned;
-    
-    print("  Query plan: " + stage);
-    print("  Documents examined: " + docsExamined);
-    print("  Documents returned: " + docsReturned);
-    
-    if (stage === "IXSCAN" || stage === "FETCH") {
-        print("  ✓ Index is being used!");
-    } else {
-        print("  ⚠ WARNING: Not using index scan (got " + stage + ")");
-    }
-} catch (e) {
-    print("  Error running explain: " + e.message);
-}
 """)
                 ]
             ),

@@ -1137,6 +1137,12 @@ def create_dash_app(requests_pathname_prefix: str = "/") -> Dash:
                     transform: none;
                 }
                 
+                .view-results-button:hover {
+                    background: linear-gradient(135deg, #764ba2 0%, #667eea 100%);
+                    box-shadow: 0 6px 16px rgba(102, 126, 234, 0.5);
+                    transform: translateY(-2px);
+                }
+                
                 .step-output {
                     margin-top: 20px;
                 }
@@ -1618,21 +1624,52 @@ def setup_callbacks(app: Dash):
                 "current_step": 0,
                 "total_steps": len(steps),
                 "step_results": {},
-                "running_step": None
+                "running_step": None,
+                "auto_execute": False  # Flag for auto-execution mode
             }
             
-            # Progress bar
+            # Progress bar with Run All Steps button
             progress_bar = html.Div([
                 html.Div([
-                    html.Div(
-                        className=f"progress-segment",
-                        id={"type": "progress-segment", "index": idx}
-                    ) for idx in range(len(steps))
-                ], className="progress-bar"),
-                html.Div(f"Step 0 of {len(steps)} completed", className="progress-text", id="progress-text")
+                    html.Div([
+                        html.Div([
+                            html.Div(
+                                className=f"progress-segment",
+                                id={"type": "progress-segment", "index": idx}
+                            ) for idx in range(len(steps))
+                        ], className="progress-bar"),
+                        html.Div(f"Step 0 of {len(steps)} completed", className="progress-text", id="progress-text")
+                    ], style={"flex": "1"}),
+                    html.Button(
+                        "▶ Run All Steps",
+                        id="run-all-steps-button",
+                        n_clicks=0,
+                        className="run-all-button",
+                        style={
+                            "padding": "10px 20px",
+                            "fontSize": "14px",
+                            "fontWeight": "600",
+                            "background": "#3b82f6",
+                            "color": "white",
+                            "border": "none",
+                            "borderRadius": "6px",
+                            "cursor": "pointer",
+                            "whiteSpace": "nowrap",
+                            "marginLeft": "20px"
+                        }
+                    )
+                ], style={"display": "flex", "alignItems": "center", "marginBottom": "20px"})
             ], className="step-progress-bar")
             
-            step_cards = [progress_bar]
+            # Auto-execution interval timer
+            auto_exec_interval = dcc.Interval(
+                id="auto-exec-interval",
+                interval=500,  # Check every 500ms
+                n_intervals=0,
+                disabled=True  # Disabled by default
+            )
+            
+            step_cards = [progress_bar, auto_exec_interval]
             
             # Render each step
             for idx, step in enumerate(steps):
@@ -1672,7 +1709,7 @@ def setup_callbacks(app: Dash):
                             "textTransform": "uppercase",
                             "letterSpacing": "0.05em"
                         })
-                        cmd_display = f"$ mongosh\\n{cmd_text}"
+                        cmd_display = f"$ mongosh --quiet\\n{cmd_text}"
                     else:
                         type_badge = html.Span([
                             html.Span("⚡ ", style={"marginRight": "4px"}),
@@ -1752,6 +1789,14 @@ def setup_callbacks(app: Dash):
                 
                 step_cards.append(step_card)
             
+            # Add completion card (content will be populated dynamically)
+            completion_card = html.Div(
+                id="completion-card",
+                className="step-card",
+                style={"display": "none"}  # Hidden until all steps complete
+            )
+            step_cards.append(completion_card)
+            
             return step_cards, initial_state
             
         except Exception as e:
@@ -1790,7 +1835,8 @@ def setup_callbacks(app: Dash):
         if exec_state.get("running_step") is not None:
             return no_update, no_update
         
-        if step_index in exec_state.get("step_results", {}):
+        # JSON serialization converts int keys to strings
+        if str(step_index) in exec_state.get("step_results", {}):
             return no_update, no_update
         
         # Verify this is the current step (not a future step)
@@ -1803,6 +1849,7 @@ def setup_callbacks(app: Dash):
         
         def run_step():
             """Execute step in background."""
+            global _demo_execution_state
             try:
                 step, success = demo.execute_step(step_index)
                 # Store result in global state for polling callback to pick up
@@ -1851,6 +1898,12 @@ def setup_callbacks(app: Dash):
         """Poll for step execution completion and update UI."""
         step_index = output_id["index"]
         
+        # Debug: show which step callback is running
+        if exec_state:
+            running_step = exec_state.get("running_step")
+            if running_step is not None and step_index in [running_step - 1, running_step, running_step + 1]:
+                print(f"DEBUG: update_step_execution callback for step {step_index}, running_step={running_step}")
+        
         # Only update if this step is currently running
         if not exec_state or exec_state.get("running_step") != step_index:
             return no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update
@@ -1864,6 +1917,9 @@ def setup_callbacks(app: Dash):
         # Check if step has completed
         if step_key not in _demo_execution_state:
             # Still running - don't update UI yet
+            if step_index == exec_state.get("running_step"):
+                # Only log for the actually running step to reduce spam
+                print(f"DEBUG: Step {step_index} still running, step_key '{step_key}' not in global state. Keys present: {list(_demo_execution_state.keys())}")
             return no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update, no_update
         
         step_result = _demo_execution_state.pop(step_key)  # Remove from global state
@@ -1978,13 +2034,81 @@ def setup_callbacks(app: Dash):
         new_state.setdefault("step_results", {})[step_index] = step_result
         new_state["current_step"] = step_index + 1
         
+        print(f"DEBUG: Storing step_result for step {step_index}, has_error={step_result.get('error') is not None}, success={step_result.get('success')}")
+        
+        # Auto-execute next step if enabled
+        auto_execute = exec_state.get("auto_execute", False)
+        total_steps = exec_state.get("total_steps", 0)
+        next_step_index = step_index + 1
+        
+        print(f"DEBUG: Step {step_index} completed. auto_execute={auto_execute}, next_step={next_step_index}, total={total_steps}")
+        
+        if auto_execute and next_step_index < total_steps:
+            # Start next step immediately
+            demo_name = exec_state.get("demo_name")
+            print(f"DEBUG: Auto-executing next step {next_step_index} for demo {demo_name}")
+            
+            def run_next_step():
+                """Execute next step in background."""
+                global _demo_execution_state
+                try:
+                    print(f"DEBUG: Thread started for step {next_step_index}")
+                    demo = get_demo(demo_name)
+                    step, success = demo.execute_step(next_step_index)
+                    step_key = f"step_{demo_name}_{next_step_index}"
+                    _demo_execution_state[step_key] = {
+                        "step": step.to_dict(),
+                        "success": success,
+                        "completed": True
+                    }
+                    print(f"DEBUG: Step {next_step_index} completed in thread, success={success}")
+                except Exception as e:
+                    print(f"DEBUG: Error in step {next_step_index} thread: {e}")
+                    step_key = f"step_{demo_name}_{next_step_index}"
+                    _demo_execution_state[step_key] = {
+                        "error": str(e),
+                        "success": False,
+                        "completed": True
+                    }
+            
+            thread = threading.Thread(target=run_next_step, daemon=True)
+            thread.start()
+            print(f"DEBUG: Thread spawned for step {next_step_index}")
+            
+            new_state["running_step"] = next_step_index
+        else:
+            print(f"DEBUG: Not auto-executing: auto_execute={auto_execute}, next<total={next_step_index < total_steps}")
+        
+        # Parse run IDs from benchmark outputs for auto-comparison
+        if not step_result.get("error"):
+            step_data = step_result["step"]
+            for output in step_data.get("outputs", []):
+                stdout = output.get("stdout", "")
+                # Look for "Run ID: <id>" patterns - run IDs are integers
+                import re
+                # Look for "Run ID: <number>"
+                run_id_match = re.search(r'Run ID:\s+(\d+)', stdout, re.IGNORECASE)
+                
+                if run_id_match:
+                    run_id = int(run_id_match.group(1))  # Convert to int for storage lookup
+                    new_state.setdefault("benchmark_run_ids", []).append(run_id)
+                    print(f"DEBUG: Parsed run ID: {run_id}")
+                else:
+                    # Debug: print first 300 chars of stdout to see what we're missing
+                    if "benchmark" in stdout.lower() or "run" in stdout.lower() or "ops" in stdout.lower():
+                        print(f"DEBUG: No run ID found in output: {stdout[:300]}...")
+        
         # Update progress text
         completed = step_index + 1
         total = new_state["total_steps"]
         progress_text = f"Step {completed} of {total} completed"
         
         # Determine if we should disable polling
-        disable_polling = True  # Will be re-enabled when next step is clicked
+        # Keep polling enabled if auto-execute is on, otherwise disable until next manual click
+        auto_execute = new_state.get("auto_execute", False)
+        disable_polling = not auto_execute
+        
+        print(f"DEBUG: Returning from update_step_execution, disable_polling={disable_polling}, auto_execute={auto_execute}")
         
         return (
             output_components,
@@ -2000,6 +2124,140 @@ def setup_callbacks(app: Dash):
             disable_polling
         )
     
+    # Handle Run All Steps button
+    @app.callback(
+        [Output("demo-execution-state", "data", allow_duplicate=True),
+         Output("auto-exec-interval", "disabled"),
+         Output("step-poll-interval", "disabled"),
+         Output("run-all-steps-button", "disabled")],
+        Input("run-all-steps-button", "n_clicks"),
+        State("demo-execution-state", "data"),
+        prevent_initial_call=True
+    )
+    def start_auto_execute(n_clicks, exec_state):
+        """Start auto-execution of all steps."""
+        if not n_clicks or not exec_state:
+            return no_update, no_update, no_update, no_update
+        
+        print(f"DEBUG: Run All Steps clicked. n_clicks={n_clicks}, current_step={exec_state.get('current_step')}")
+        
+        # Enable auto-execute mode and start first step
+        new_state = exec_state.copy()
+        new_state["auto_execute"] = True
+        
+        print(f"DEBUG: Set auto_execute=True in state")
+        
+        # If no step is running and we're at step 0, trigger first step
+        if new_state.get("running_step") is None and new_state.get("current_step", 0) == 0:
+            demo_name = new_state["demo_name"]
+            demo = get_demo(demo_name)
+            
+            print(f"DEBUG: Starting first step for demo {demo_name}")
+            
+            def run_step():
+                """Execute step in background."""
+                global _demo_execution_state
+                try:
+                    print(f"DEBUG: Thread started for step 0")
+                    step, success = demo.execute_step(0)
+                    step_key = f"step_{demo_name}_0"
+                    _demo_execution_state[step_key] = {
+                        "step": step.to_dict(),
+                        "success": success,
+                        "completed": True
+                    }
+                    print(f"DEBUG: Step 0 completed in thread, success={success}")
+                except Exception as e:
+                    print(f"DEBUG: Error in step 0 thread: {e}")
+                    step_key = f"step_{demo_name}_0"
+                    _demo_execution_state[step_key] = {
+                        "error": str(e),
+                        "success": False,
+                        "completed": True
+                    }
+            
+            thread = threading.Thread(target=run_step, daemon=True)
+            thread.start()
+            print(f"DEBUG: Thread spawned for step 0")
+            
+            new_state["running_step"] = 0
+        
+        print(f"DEBUG: Returning state with auto_execute={new_state.get('auto_execute')}, running_step={new_state.get('running_step')}")
+        return new_state, False, False, True  # Enable both intervals (auto-exec and step-poll), disable button
+    
+    # Auto-execute next step when previous completes (simplified - kept for monitoring)
+    @app.callback(
+        [Output("demo-execution-state", "data", allow_duplicate=True),
+         Output("auto-exec-interval", "disabled", allow_duplicate=True)],
+        Input("auto-exec-interval", "n_intervals"),
+        State("demo-execution-state", "data"),
+        prevent_initial_call=True
+    )
+    def monitor_auto_execution(n_intervals, exec_state):
+        """Monitor auto-execution and disable interval when complete."""
+        if not exec_state or not exec_state.get("auto_execute"):
+            return no_update, True  # Disable interval if not auto-executing
+        
+        current_step = exec_state.get("current_step", 0)
+        total_steps = exec_state.get("total_steps", 0)
+        
+        # If all steps complete, disable auto-execute
+        if current_step >= total_steps:
+            new_state = exec_state.copy()
+            new_state["auto_execute"] = False
+            return new_state, True  # Disable interval
+        
+        return no_update, False  # Keep interval enabled
+    
+    # Update Run All Steps button state
+    @app.callback(
+        [Output("run-all-steps-button", "children"),
+         Output("run-all-steps-button", "disabled", allow_duplicate=True),
+         Output("run-all-steps-button", "style")],
+        Input("demo-execution-state", "data"),
+        prevent_initial_call=True
+    )
+    def update_run_all_button(exec_state):
+        """Update Run All Steps button based on execution state."""
+        if not exec_state:
+            return no_update, no_update, no_update
+        
+        auto_execute = exec_state.get("auto_execute", False)
+        current_step = exec_state.get("current_step", 0)
+        total_steps = exec_state.get("total_steps", 0)
+        
+        print(f"DEBUG: update_run_all_button - auto_execute={auto_execute}, current={current_step}, total={total_steps}")
+        
+        base_style = {
+            "padding": "10px 20px",
+            "fontSize": "14px",
+            "fontWeight": "600",
+            "color": "white",
+            "border": "none",
+            "borderRadius": "6px",
+            "cursor": "pointer",
+            "whiteSpace": "nowrap",
+            "marginLeft": "20px"
+        }
+        
+        # If auto-executing
+        if auto_execute:
+            style = base_style.copy()
+            style["background"] = "#f59e0b"  # Orange during execution
+            print(f"DEBUG: Button shows 'Running...'")
+            return "⏸ Running...", True, style
+        
+        # If all steps complete
+        if current_step >= total_steps:
+            style = base_style.copy()
+            style["background"] = "#22c55e"  # Green when complete
+            return "✓ Complete", True, style
+        
+        # Default ready state
+        style = base_style.copy()
+        style["background"] = "#3b82f6"  # Blue when ready
+        return "▶ Run All Steps", False, style
+    
     # Enable next step button after current step completes
     @app.callback(
         Output({"type": "execute-step-btn", "index": ALL}, "disabled"),
@@ -2014,6 +2272,7 @@ def setup_callbacks(app: Dash):
         current_step = exec_state.get("current_step", 0)
         running_step = exec_state.get("running_step")
         step_results = exec_state.get("step_results", {})
+        auto_execute = exec_state.get("auto_execute", False)
         
         disabled_states = []
         for button_id in button_ids:
@@ -2023,10 +2282,14 @@ def setup_callbacks(app: Dash):
             # 1. Already completed
             # 2. A step is currently running
             # 3. Not the current step
-            if step_index in step_results:
+            # 4. Auto-execute mode is enabled
+            # JSON serialization converts int keys to strings
+            if str(step_index) in step_results:
                 disabled_states.append(True)
             elif running_step is not None:
                 disabled_states.append(True)
+            elif auto_execute:
+                disabled_states.append(True)  # Disable all during auto-execute
             elif step_index != current_step:
                 disabled_states.append(True)
             else:
@@ -2053,9 +2316,11 @@ def setup_callbacks(app: Dash):
         class_names = []
         for card_id in card_ids:
             step_index = card_id["index"]
+            # JSON serialization converts int keys to strings
+            step_key = str(step_index)
             
-            if step_index in step_results:
-                if step_results[step_index].get("error"):
+            if step_key in step_results:
+                if step_results[step_key].get("error"):
                     class_names.append("step-card step-error")
                 else:
                     class_names.append("step-card step-completed")
@@ -2067,6 +2332,145 @@ def setup_callbacks(app: Dash):
                 class_names.append("step-card step-locked")
         
         return class_names
+    
+    # Update step badges based on progress
+    @app.callback(
+        [Output({"type": "step-badge", "index": ALL}, "children"),
+         Output({"type": "step-badge", "index": ALL}, "className")],
+        [Input("demo-execution-state", "data"),
+         Input({"type": "step-badge", "index": ALL}, "id")],
+        prevent_initial_call=True
+    )
+    def update_step_badges(exec_state, badge_ids):
+        """Update step badges based on execution state."""
+        if not exec_state or not badge_ids:
+            return [no_update] * len(badge_ids), [no_update] * len(badge_ids)
+        
+        current_step = exec_state.get("current_step", 0)
+        running_step = exec_state.get("running_step")
+        step_results = exec_state.get("step_results", {})
+        
+        print(f"DEBUG: update_step_badges - current={current_step}, running={running_step}, step_results keys={list(step_results.keys())}")
+        
+        badge_texts = []
+        badge_classes = []
+        
+        for badge_id in badge_ids:
+            step_index = badge_id["index"]
+            # JSON serialization converts int keys to strings
+            step_key = str(step_index)
+            
+            if step_key in step_results:
+                if step_results[step_key].get("error"):
+                    badge_texts.append("Error")
+                    badge_classes.append("step-status-badge badge-error")
+                else:
+                    badge_texts.append("Completed")
+                    badge_classes.append("step-status-badge badge-completed")
+                    print(f"DEBUG: Badge for step {step_index} set to Completed")
+            elif step_index == running_step:
+                badge_texts.append("Running")
+                badge_classes.append("step-status-badge badge-running")
+                print(f"DEBUG: Badge for step {step_index} set to Running")
+            else:
+                badge_texts.append("Pending")
+                badge_classes.append("step-status-badge badge-pending")
+                print(f"DEBUG: Badge for step {step_index} set to Pending (not in results, not running)")
+        
+        return badge_texts, badge_classes
+    
+    # Show completion card when all steps are done
+    @app.callback(
+        [Output("completion-card", "children"),
+         Output("completion-card", "style")],
+        Input("demo-execution-state", "data"),
+        prevent_initial_call=True
+    )
+    def show_completion_card(exec_state):
+        """Show completion card when all demo steps are complete."""
+        if not exec_state:
+            return [], {"display": "none"}
+        
+        total_steps = exec_state.get("total_steps", 0)
+        step_results = exec_state.get("step_results", {})
+        
+        # Check if all steps are complete (and successful)
+        if len(step_results) == total_steps:
+            all_successful = all(not result.get("error") for result in step_results.values())
+            if all_successful:
+                # Get benchmark run IDs if available
+                run_ids = exec_state.get("benchmark_run_ids", [])
+                
+                # Build completion card content
+                card_content = [
+                    html.Div([
+                        html.H4("🎉 Demo Complete!"),
+                        html.P("All steps have been executed successfully.", style={"color": "#64748b", "marginTop": "8px"})
+                    ], style={"textAlign": "center", "marginBottom": "24px"})
+                ]
+                
+                # Debug: print run IDs
+                print(f"DEBUG: Completion card - run_ids: {run_ids}")
+                
+                # If we have exactly 2 benchmark runs, use comparison button
+                if len(run_ids) == 2:
+                    print(f"DEBUG: Creating comparison button with baseline={run_ids[0]}, optimized={run_ids[1]}")
+                    button = html.Button(
+                        "📊 Compare Benchmark Results",
+                        id={"type": "view-comparison", "baseline": run_ids[0], "optimized": run_ids[1]},
+                        className="view-results-button",
+                        style={
+                            "padding": "12px 24px",
+                            "fontSize": "16px",
+                            "fontWeight": "600",
+                            "background": "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+                            "color": "white",
+                            "border": "none",
+                            "borderRadius": "8px",
+                            "cursor": "pointer",
+                            "boxShadow": "0 4px 12px rgba(102, 126, 234, 0.4)",
+                            "transition": "all 0.3s ease"
+                        },
+                        n_clicks=0
+                    )
+                else:
+                    # Fallback to simple view results button
+                    button = html.Button(
+                        "📊 View Results",
+                        id="view-results-button",
+                        className="view-results-button",
+                        style={
+                            "padding": "12px 24px",
+                            "fontSize": "16px",
+                            "fontWeight": "600",
+                            "background": "linear-gradient(135deg, #667eea 0%, #764ba2 100%)",
+                            "color": "white",
+                            "border": "none",
+                            "borderRadius": "8px",
+                            "cursor": "pointer",
+                            "boxShadow": "0 4px 12px rgba(102, 126, 234, 0.4)",
+                            "transition": "all 0.3s ease"
+                        },
+                        n_clicks=0
+                    )
+                
+                card_content.append(html.Div([button], style={"textAlign": "center"}))
+                
+                return card_content, {"display": "block"}
+        
+        return [], {"display": "none"}
+    
+    # Navigate to results tab when View Results button is clicked
+    @app.callback(
+        Output("tabs", "value"),
+        Input("view-results-button", "n_clicks"),
+        prevent_initial_call=True
+    )
+    def navigate_to_results(n_clicks):
+        """Navigate to the results tab when View Results button is clicked."""
+        if n_clicks:
+            return "view-results"
+        return no_update
     
     # Benchmark tab callbacks
     @app.callback(
