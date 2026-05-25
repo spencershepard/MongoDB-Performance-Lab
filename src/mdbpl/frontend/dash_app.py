@@ -21,7 +21,6 @@ import plotly.graph_objects as go
 from dash import Dash, html, dcc, callback, Input, Output, State, no_update, ALL, MATCH, callback_context
 
 from ..demos import list_demos, get_demo
-from ..executor import WorkloadExecutor
 from ..storage import BenchmarkStorage
 import os
 
@@ -1308,7 +1307,6 @@ def create_dash_app(requests_pathname_prefix: str = "/") -> Dash:
             dcc.Tabs(id="tabs", value="home", children=[
                 dcc.Tab(label="🧠 Learn", value="home", className="custom-tab"),
                 dcc.Tab(label="🪄 Demos", value="demos", className="custom-tab"),
-                dcc.Tab(label="⚡ Run Benchmark", value="run-benchmark", className="custom-tab"),
                 dcc.Tab(label="📊 View Results", value="view-results", className="custom-tab"),
             ], className="tabs-container"),
             
@@ -1317,7 +1315,6 @@ def create_dash_app(requests_pathname_prefix: str = "/") -> Dash:
         
         # Stores for tracking state
         dcc.Store(id="execution-state", data={"running": False, "result": None}),
-        dcc.Store(id="benchmark-state", data={"running": False, "result": None}),
         # Stores for View Results tab (must be in main layout for callbacks)
         dcc.Store(id="selected-runs", data=[]),
         dcc.Store(id="comparison-swap-state", data=False),
@@ -1398,63 +1395,6 @@ def render_demos_tab():
     ])
 
 
-def render_run_benchmark_tab():
-    """Render the run benchmark tab content."""
-    return html.Div([
-        html.Div([
-            html.Label("Select Workload:", className="label"),
-            dcc.Dropdown(
-                id="workload-selector",
-                options=[],
-                placeholder="Choose a workload...",
-                className="dropdown"
-            ),
-        ], className="selector-container"),
-        
-        html.Div(id="workload-description", className="description"),
-        
-        html.Div([
-            html.Div([
-                html.Label("Duration (seconds):", className="label"),
-                dcc.Input(
-                    id="duration-input",
-                    type="number",
-                    value=30,
-                    min=5,
-                    max=300,
-                    className="input"
-                ),
-            ], className="input-group", style={"width": "48%", "display": "inline-block"}),
-            
-            html.Div([
-                html.Label("Tag (optional):", className="label"),
-                dcc.Input(
-                    id="tag-input",
-                    type="text",
-                    placeholder="e.g., baseline, optimized",
-                    className="input"
-                ),
-            ], className="input-group", style={"width": "48%", "display": "inline-block", "marginLeft": "4%"}),
-        ]),
-        
-        html.Button(
-            "Run Benchmark",
-            id="run-benchmark-button",
-            n_clicks=0,
-            disabled=True,
-            className="run-button"
-        ),
-        
-        dcc.Loading(
-            id="benchmark-loading",
-            type="default",
-            children=[
-                html.Div(id="benchmark-status", className="status"),
-                html.Div(id="benchmark-results", children=[]),
-            ],
-            className="loading-container"
-        ),
-    ])
 
 
 def render_view_results_tab():
@@ -1520,8 +1460,6 @@ def setup_callbacks(app: Dash):
             return render_home_tab()
         elif tab == "demos":
             return render_demos_tab()
-        elif tab == "run-benchmark":
-            return render_run_benchmark_tab()
         elif tab == "view-results":
             return render_view_results_tab()
         return html.Div("Select a tab")
@@ -2471,133 +2409,6 @@ def setup_callbacks(app: Dash):
         if n_clicks:
             return "view-results"
         return no_update
-    
-    # Benchmark tab callbacks
-    @app.callback(
-        Output("workload-selector", "options"),
-        Input("workload-selector", "id")
-    )
-    def load_workloads(_):
-        """Load available workloads."""
-        try:
-            workloads = ["read-heavy", "balanced", "write-heavy", "range-scan"]
-            return [{"label": w, "value": w} for w in workloads]
-        except Exception as e:
-            return [{"label": f"Error: {e}", "value": "error"}]
-    
-    @app.callback(
-        [Output("workload-description", "children"),
-         Output("run-benchmark-button", "disabled")],
-        Input("workload-selector", "value")
-    )
-    def update_workload_info(workload_name):
-        """Update workload description when selection changes."""
-        if not workload_name or workload_name == "error":
-            return "", True
-        
-        try:
-            workload_descriptions = {
-                "read-heavy": "95% reads, 5% updates (YCSB Workload B)",
-                "balanced": "50% reads, 50% updates (YCSB Workload A)",
-                "write-heavy": "10% reads, 90% updates (YCSB Workload E)",
-                "range-scan": "80% range queries, 20% point reads"
-            }
-            description = html.Div([
-                html.P(workload_descriptions.get(workload_name, "No description available")),
-                html.P(f"Distribution: zipfian", 
-                       style={"fontSize": "14px", "color": "#64748b"})
-            ], className="demo-description")
-            return description, False
-        except Exception as e:
-            return html.Div(f"Error loading workload: {e}", className="error"), True
-    
-    @app.callback(
-        [Output("benchmark-state", "data"),
-         Output("benchmark-status", "children"),
-         Output("benchmark-results", "children")],
-        Input("run-benchmark-button", "n_clicks"),
-        [State("workload-selector", "value"),
-         State("duration-input", "value"),
-         State("tag-input", "value"),
-         State("benchmark-state", "data")]
-    )
-    def run_benchmark_workload(n_clicks, workload_name, duration, tag, state):
-        """Execute a benchmark workload."""
-        if n_clicks == 0 or not workload_name:
-            return no_update, no_update, no_update
-        
-        if state.get("running"):
-            return no_update, no_update, no_update
-        
-        try:
-            # Load Python benchmark
-            if workload_name == "read-heavy":
-                from mdbpl import create_read_heavy_benchmark
-                workload = create_read_heavy_benchmark()
-            elif workload_name == "balanced":
-                from mdbpl import create_balanced_benchmark
-                workload = create_balanced_benchmark()
-            elif workload_name == "write-heavy":
-                from mdbpl import create_write_heavy_benchmark
-                workload = create_write_heavy_benchmark()
-            elif workload_name == "range-scan":
-                from mdbpl import create_range_scan_benchmark
-                workload = create_range_scan_benchmark()
-            else:
-                raise ValueError(f"Unknown workload: {workload_name}")
-            
-            # Create executor
-            executor_instance = WorkloadExecutor(
-                workload=workload,
-                mongodb_uri=MONGODB_URI,
-                record_count=10000  # Default record count
-            )
-            
-            # Update status
-            status = html.Span("⏳ Running benchmark... This may take a minute.", className="status-running")
-            
-            # Run benchmark
-            result = executor_instance.run(duration or 30, tag or "")
-            
-            # Save to storage
-            run_id = storage.save_result(
-                result=result,
-                tag=tag or ""
-            )
-            
-            # Update state
-            new_state = {"running": False, "result": result}
-            success_status = html.Span(f"✅ Benchmark completed! Run ID: {run_id}", className="status-success")
-            
-            # Create results display
-            results_display = html.Div([
-                html.H3("📊 Results", className="results-title"),
-                html.Div([
-                    html.Div([
-                        html.Label("Throughput:"),
-                        html.Span(f"{result.operations_per_second:.2f} ops/sec", className="metric-value")
-                    ], className="metric-item"),
-                    html.Div([
-                        html.Label("Latency P50:"),
-                        html.Span(f"{result.latency_p50:.3f} ms", className="metric-value")
-                    ], className="metric-item"),
-                    html.Div([
-                        html.Label("Latency P95:"),
-                        html.Span(f"{result.latency_p95:.3f} ms", className="metric-value")
-                    ], className="metric-item"),
-                    html.Div([
-                        html.Label("Latency P99:"),
-                        html.Span(f"{result.latency_p99:.3f} ms", className="metric-value")
-                    ], className="metric-item"),
-                ], style={"display": "grid", "gridTemplateColumns": "repeat(2, 1fr)", "gap": "16px", "marginTop": "20px"})
-            ])
-            
-            return new_state, success_status, results_display
-            
-        except Exception as e:
-            new_state = {"running": False, "result": None}
-            error_status = html.Span(f"❌ Error: {str(e)}", className="status-error")
-            return new_state, error_status, html.Div()
     
     # View results tab callbacks
     @app.callback(

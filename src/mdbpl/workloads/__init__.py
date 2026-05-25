@@ -4,9 +4,6 @@ Each workload is a factory function returning a configured Benchmark.
 The REGISTRY maps CLI workload names to their factory functions.
 """
 
-from .read_heavy import create_read_heavy_benchmark
-from .balanced import create_balanced_benchmark
-from .write_heavy import create_write_heavy_benchmark
 from .range_scan import create_range_scan_benchmark
 from .insert import create_insert_benchmark
 from .update import create_update_benchmark
@@ -16,9 +13,6 @@ from .top_n import create_top_n_benchmark
 from .group_by import create_group_by_benchmark
 
 __all__ = [
-    "create_read_heavy_benchmark",
-    "create_balanced_benchmark",
-    "create_write_heavy_benchmark",
     "create_range_scan_benchmark",
     "create_insert_benchmark",
     "create_update_benchmark",
@@ -33,7 +27,6 @@ __all__ = [
 # All factories accept (database, collection, record_count) as a base,
 # plus workload-specific keyword arguments.
 REGISTRY = {
-    # New generic building blocks
     "insert":      create_insert_benchmark,
     "update":      create_update_benchmark,
     "point-read":  create_point_read_benchmark,
@@ -41,8 +34,4 @@ REGISTRY = {
     "mixed":       create_mixed_benchmark,
     "top-n":       create_top_n_benchmark,
     "group-by":    create_group_by_benchmark,
-    # Legacy YCSB-pattern workloads (kept for backwards compatibility)
-    "read-heavy":  create_read_heavy_benchmark,
-    "balanced":    create_balanced_benchmark,
-    "write-heavy": create_write_heavy_benchmark,
 }

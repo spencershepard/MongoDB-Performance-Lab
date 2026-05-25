@@ -1,21 +1,56 @@
 """
-Overindexing Demo - Shows write performance degradation from excessive indexes.
+Overindexing Demo — shows write performance degradation from maintaining too many indexes.
 
-PATTERN: baseline (no indexes) → one index → over-indexed (9 indexes) → compare
+WORKFLOW PATTERN: write-performance / overindexing
+  init → baseline (no secondary indexes) → one index → add many indexes → measure → compare
 
-KEY INSIGHT: Every write operation (insert, update, delete) must update ALL indexes
-on the collection. With 9 indexes, each insert touches 9 B-tree structures instead
-of 1, multiplying I/O and lock contention under concurrent load.
+KEY INSIGHT: Every write must update ALL indexes on the collection. With 9 indexes,
+each insert touches 9 B-tree structures instead of 1, multiplying I/O and lock
+contention under concurrent load.
 
 WORKLOAD: mdbpl run --workload insert --batch-size 1 --threads 8
 - insert_one per operation (no batch pipelining) maximises per-op index lock cycles
 - 8 concurrent threads surface B-tree write-lock contention
 - 50k dataset pushes index B-trees beyond WiredTiger's warm cache
+
+LLM ADAPTATION GUIDE:
+  To adapt this demo to a user's write-heavy collection:
+
+  1. Field mapping
+     Replace --fields score,field0,...,field7 with the actual fields the user's
+     application writes on insert. Include every field that has or will have an index.
+     Example (orders collection):
+       --fields status,region,customerId,amount,createdAt,updatedAt,productId,warehouseId
+
+  2. Index selection
+     In the "add-indexes" step, create indexes that mirror the user's real index set.
+     Each createIndex call should reflect a query the application actually runs.
+     The more indexes match real queries, the more convincing the comparison.
+
+  3. Scale
+     50k is the minimum to push index pages out of WiredTiger cache.
+     For collections > 1M docs in production, use --scale 100k or --scale 1m.
+     The relative degradation (%) is what matters, not absolute throughput.
+
+  4. Workload choice for write scenarios
+     insert      → new document creation (used here)
+     update      → in-place field changes; use --filter-field and --update-fields
+     mixed       → combined read + write; set --read-pct to match the user's ratio
+
+  5. Thread count
+     --threads 8 is a good default for write contention demos.
+     Match to the user's expected application concurrency if known.
 """
 
 from typing import List
 from .base import Demo, DemoStep, ShellCommand, MongoshCommand
 
+# Shared insert command used across all three benchmark steps.
+# --fields lists every field the workload writes — must match the fields being indexed.
+# Adapt: replace with the user's actual written fields, e.g.:
+#   "status,region,customerId,amount,createdAt,updatedAt,productId,warehouseId"
+# Rule: all three benchmark steps (no-index, one-index, over-indexed) MUST use
+# identical flags; only --tag changes between runs.
 _INSERT_CMD = (
     "mdbpl run --workload insert"
     " --fields score,field0,field1,field2,field3,field4,field5,field6,field7"

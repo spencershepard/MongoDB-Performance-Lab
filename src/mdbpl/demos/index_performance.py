@@ -1,26 +1,35 @@
 """
-Index Performance Demo - Shows dramatic read improvement with proper indexing.
+Index Performance Demo — shows dramatic read improvement from a single well-chosen index.
 
-TEMPLATE PATTERNS FOR LLM-GENERATED WORKFLOWS:
+WORKFLOW PATTERN: read-performance / index-impact
+  init → baseline (no index) → create index → measure → compare
 
-This demo follows the standard performance testing workflow:
-1. Initialize test data matching your query pattern
-2. Run baseline benchmark (before optimization)
-3. Apply optimization (create index, change schema, etc.)
-4. Run optimized benchmark (same query after optimization)
-5. Compare results side-by-side
+LLM ADAPTATION GUIDE:
+  This demo benchmarks range queries on a numeric field. To adapt to a user's schema:
 
-COMMAND PATTERNS:
-- ShellCommand: For mdbpl CLI commands (init, run, compare)
-- MongoshCommand: For direct MongoDB operations (createIndex, queries, updates)
-- Always tag benchmarks for easy comparison
-- Use collapse_output=False to show detailed results
+  1. Field mapping
+     score          → any numeric field: price, amount, createdAt (as epoch ms), rating
+     range_size     → set to ~20% of the field's value domain
+                      (e.g. 30-day window for a 150-day date range = range_size 30)
 
-WORKFLOW STRUCTURE:
-- Each DemoStep has: id, title, description, markdown, commands
-- markdown explains WHY this step matters (context for LLM and users)
-- commands list contains ShellCommand or MongoshCommand objects
-- Steps execute sequentially in order
+  2. Collection / database
+     Replace "usertable" / "perflab" with --collection <name> --database <name>
+     on both `mdbpl init` and every `mdbpl run` command.
+
+  3. Scale
+     10k is enough to show the COLLSCAN vs IXSCAN difference.
+     Use --scale 100k if the user's collection is large and they want realistic numbers.
+
+  4. Workload choice
+     range-scan  → range queries + sorting (dates, prices, scores)  ← used here
+     point-read  → equality lookups by a unique key
+     top-n       → "show me the top 100 by X" queries
+     mixed       → read/write mix (set --read-pct to match their workload ratio)
+
+  5. Tagging rule
+     Every `mdbpl run` must have --tag.
+     Baseline tag and post-optimization tag must be passed together to `mdbpl compare`.
+     Never re-use a tag across different workload configurations.
 """
 
 from typing import List
@@ -55,48 +64,38 @@ class IndexPerformanceDemo(Demo):
         """Define the demo steps."""
         return [
             # STEP 1: Initialize test data
-            # Pattern: Load realistic data matching your query workload
+            # Pattern: mdbpl init loads the dataset AND injects the numeric score field.
+            # No manual post-processing needed — score (0..record_count-1) is always present.
             DemoStep(
                 id="init",
                 title="Initialize Test Dataset",
-                description="Load 10,000 YCSB documents and add numeric score field for range queries",
+                description="Load 10,000 documents with a numeric score field for range queries",
                 markdown="""
 ## Initialize Test Data
 
-Load 10,000 test documents using YCSB (Yahoo Cloud Serving Benchmark) format. YCSB generates realistic documents with 10 random fields, simulating real-world data like user profiles or product catalogs.
+Load 10,000 test documents. Each document contains ten string fields (`field0`–`field9`)
+and a sequential numeric `score` field (0–9,999), which is used as the range-query target.
 
-Then add a **numeric `score` field** (0-9999) to enable range query testing. Range queries are common for filtering by dates, prices, ratings, or other numeric values.
+`score` represents any numeric field in a real application: a price, a rating, a timestamp
+as epoch milliseconds, an age, a priority level. The range-scan workload will query
+`{score: {$gte: N, $lt: N+2000}}` — replace `score` with `--field <your_field>` and
+set `--range-size` to match your data's value domain.
 
-**Why 10k documents?** With larger datasets, collection scans become significantly slower while index lookups stay fast, making the performance difference dramatic.
+**Why 10k documents?** Collection scans become dramatically slower as datasets grow,
+while index lookups stay O(log n). Even at 10k the difference is 10–100×; at 1M it's
+larger still.
 """,
                 commands=[
-                    # Pattern: Use mdbpl init to load YCSB test data
-                    # --scale controls dataset size (10k = 10,000 documents)
+                    # mdbpl init loads documents and injects the score field in one step.
+                    # To use a custom collection: mdbpl init --scale 10k --collection orders --database myapp
                     ShellCommand("mdbpl init --scale 10k", collapse_output=False),
-                    
-                    # Pattern: Use MongoshCommand for MongoDB operations
-                    # This adds a numeric field for range query testing
-                    MongoshCommand("""
-var count = 0;
-var batch = [];
-db.usertable.find().forEach(function(doc) {
-    batch.push({updateOne: {filter: {_id: doc._id}, update: {$set: {score: count++}}}});
-    if (batch.length >= 1000) {
-        db.usertable.bulkWrite(batch);
-        batch = [];
-    }
-});
-if (batch.length > 0) db.usertable.bulkWrite(batch);
-
-print("✓ Added score field to 10,000 documents");
-print("Sample: " + JSON.stringify(db.usertable.findOne({}, {_id: 1, score: 1})));
-""", collapse_output=False)
                 ]
             ),
             
-            # STEP 2: Baseline benchmark (before optimization)
-            # Pattern: Always measure before optimization to establish baseline
-            # Tag your benchmark for easy comparison later
+            # STEP 2: Baseline — always measure BEFORE the optimization.
+            # The tag ("baseline") must be passed to mdbpl compare later.
+            # To benchmark a different field: add --field <name> --range-size <N>
+            # To benchmark a different collection: add --collection <name> --database <name>
             DemoStep(
                 id="baseline",
                 title="Baseline Performance (No Index)",
@@ -127,8 +126,10 @@ Run benchmark workload **without any index** on the score field to establish bas
                 ]
             ),
             
-            # STEP 3: Apply optimization (create index)
-            # Pattern: Use MongoshCommand for MongoDB DDL operations
+            # STEP 3: Apply the optimization.
+            # Use MongoshCommand for any DDL: createIndex, dropIndex, collMod, etc.
+            # For compound indexes: db.collection.createIndex({field1: 1, field2: 1})
+            # For descending sort: db.collection.createIndex({field: -1})
             DemoStep(
                 id="create-index",
                 title="Create Index on Score Field",
@@ -167,8 +168,9 @@ db.usertable.getIndexes().forEach(function(idx) {
                 ]
             ),
             
-            # STEP 4: Measure after optimization
-            # Pattern: Run same benchmark with identical parameters + different tag
+            # STEP 4: Re-run the IDENTICAL workload, only the tag changes.
+            # All other flags (--field, --range-size, --duration, --threads) must match step 2
+            # exactly — otherwise mdbpl compare is not apples-to-apples.
             DemoStep(
                 id="with-index",
                 title="Performance With Index",
@@ -203,8 +205,7 @@ Run the **exact same workload** again, but now MongoDB uses the index.
                 ]
             ),
             
-            # STEP 5: Compare results
-            # Pattern: Use mdbpl compare with tags from previous benchmarks
+            # STEP 5: Compare — pass the tags from steps 2 and 4 in order (baseline first).
             DemoStep(
                 id="compare",
                 title="Compare Results",

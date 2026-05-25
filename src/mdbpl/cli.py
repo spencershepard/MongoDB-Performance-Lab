@@ -135,8 +135,7 @@ def _print_results(result, tag: str):
 @cli.command()
 @click.option("--workload", required=True,
               help="Workload name or path to a .py file. "
-                   "Built-in: insert, update, point-read, range-scan, mixed, "
-                   "top-n, group-by, read-heavy, balanced, write-heavy")
+                   "Built-in: insert, update, point-read, range-scan, mixed, top-n, group-by")
 # Targeting
 @click.option("--collection", default="usertable", show_default=True, help="Collection to benchmark")
 @click.option("--database", default="perflab", show_default=True, help="Database to benchmark")
@@ -292,7 +291,6 @@ def run(workload, collection, database, threads, duration, tag, distribution,
             )
 
         else:
-            # Legacy workloads (read-heavy, balanced, write-heavy)
             benchmark = REGISTRY[workload](**common)
 
     else:
