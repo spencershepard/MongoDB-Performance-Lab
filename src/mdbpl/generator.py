@@ -121,6 +121,31 @@ SCHEMA_PRESETS: Dict[str, SchemaSpec] = {
             FieldSpec("score", "int", sequential=True),
         ],
     ),
+    "videogame": SchemaSpec(
+        name="videogame",
+        fields=[
+            FieldSpec("playerId", "string", length=16),
+            FieldSpec("username", "string", length=12),
+            FieldSpec("level", "int", min_val=1, max_val=101),
+            FieldSpec("xp", "int", min_val=0, max_val=1_000_000),
+            FieldSpec("rank", "choice", choices=["Bronze", "Silver", "Gold", "Platinum", "Diamond", "Master", "Grandmaster"]),
+            FieldSpec("region", "choice", choices=["NA", "EU", "APAC", "SA", "OCE"]),
+            FieldSpec("character", "choice", choices=["Warrior", "Mage", "Rogue", "Paladin", "Ranger", "Necromancer", "Druid", "Monk"]),
+            FieldSpec("weaponPrimary", "choice", choices=["Sword", "Staff", "Bow", "Axe", "Dagger", "Wand", "Hammer", "Spear"]),
+            FieldSpec("gamesPlayed", "int", min_val=0, max_val=10_000),
+            FieldSpec("wins", "int", min_val=0, max_val=5_000),
+            FieldSpec("kills", "int", min_val=0, max_val=100_000),
+            FieldSpec("deaths", "int", min_val=0, max_val=50_000),
+            FieldSpec("assists", "int", min_val=0, max_val=80_000),
+            FieldSpec("headshots", "int", min_val=0, max_val=50_000),
+            FieldSpec("kdr", "float", min_val=0.0, max_val=10.0),
+            FieldSpec("winRate", "float", min_val=0.0, max_val=1.0),
+            FieldSpec("avgMatchDuration", "int", min_val=300, max_val=3_600),
+            FieldSpec("lastSeen", "date"),
+            FieldSpec("accountCreated", "date"),
+            FieldSpec("score", "int", sequential=True),
+        ],
+    ),
 }
 
 
