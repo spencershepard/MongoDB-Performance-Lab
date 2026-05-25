@@ -129,7 +129,7 @@ def _print_results(result, tag: str):
 @cli.command()
 @click.option("--workload", required=True,
               help="Workload name or path to a .py file. "
-                   "Built-in: insert, update, point-read, range-scan, mixed, top-n, group-by")
+                   "Built-in: insert, update, point-read, range-scan, mixed, top-n, group-by, raw")
 # Targeting
 @click.option("--collection", default="usertable", show_default=True, help="Collection to benchmark")
 @click.option("--database", default="perflab", show_default=True, help="Database to benchmark")
@@ -175,10 +175,15 @@ def _print_results(result, tag: str):
               help="Accumulator (group-by): count | sum | avg | min | max")
 @click.option("--value-field", default=None,
               help="Field to accumulate for sum/avg/min/max (group-by)")
+# raw
+@click.option("--pipeline", default=None,
+              help="JSON aggregation pipeline string (raw workload). "
+                   "Use {{field:dist}} template variables for per-operation sampling. "
+                   "Distributions: uniform (default), zipfian, sequential, literal:<value>.")
 def run(workload, collection, database, threads, duration, tag, distribution,
         fields, batch_size, filter_field, update_fields, read_pct,
         field, range_size, sort_field, sort_direction, limit,
-        match_field, match_value, group_field, accumulator, value_field):
+        match_field, match_value, group_field, accumulator, value_field, pipeline):
     """Run a benchmark workload."""
     from mdbpl.executor import WorkloadExecutor, parse_duration
     from mdbpl.workloads import REGISTRY
@@ -297,6 +302,13 @@ def run(workload, collection, database, threads, duration, tag, distribution,
                 accumulator=accumulator,
                 value_field=value_field,
             )
+
+        elif workload == "raw":
+            if not pipeline:
+                click.echo("✗ --pipeline is required for the raw workload.", err=True)
+                click.echo("  Example: --pipeline '[{\"$match\": {\"region\": \"{{region:zipfian}}\"}}, {\"$limit\": 100}]'", err=True)
+                raise click.Abort()
+            benchmark = REGISTRY["raw"](**common, pipeline=pipeline)
 
         else:
             benchmark = REGISTRY[workload](**common)

@@ -71,9 +71,12 @@ class ExplainCapturingCollection:
         return self.collection.insert_many(documents, **kwargs)
     
     def aggregate(self, pipeline, **kwargs):
-        """Pass through aggregate (complex explain, skip for now)."""
-        self.last_query = None  # Could add aggregate explain support later
-        return self.collection.aggregate(pipeline, **kwargs)
+        """Wrap aggregate() to capture the pipeline for explain sampling."""
+        self.last_query = {"_type": "aggregate", "pipeline": list(pipeline)}
+        result = self.collection.aggregate(pipeline, **kwargs)
+        docs = list(result)
+        self.last_result_count = len(docs)
+        return iter(docs)
     
     def __getattr__(self, name):
         """Pass through any other methods to the underlying collection."""
@@ -279,57 +282,77 @@ class WorkloadExecutor:
                 # Sample 10% of queries for explain
                 try:
                     query_info = wrapped_collection.last_query
-                    
-                    # Build find command
-                    find_cmd = {
-                        'find': collection.name,
-                        'filter': query_info.get('filter', {})
-                    }
-                    if query_info.get('projection'):
-                        find_cmd['projection'] = query_info['projection']
-                    if query_info.get('limit'):
-                        find_cmd['limit'] = query_info['limit']
-                    if query_info.get('sort'):
-                        find_cmd['sort'] = query_info['sort']
-                    
-                    # Run explain
-                    explain_result = collection.database.command('explain', find_cmd, verbosity='allPlansExecution')
-                    
-                    if 'executionStats' in explain_result:
-                        stats = explain_result['executionStats']
-                        docs_examined = stats.get('totalDocsExamined', 0)
-                        keys_examined = stats.get('totalKeysExamined', 0)
-                        
-                        # Get actual result count from the wrapper
-                        docs_returned = wrapped_collection.last_result_count
-                        
-                        # For index scans, use keys examined if docs examined is 0
-                        if docs_examined == 0 and keys_examined > 0:
-                            docs_examined = keys_examined
-                        
-                        # Get index info from execution stages
-                        def find_index_scan(stage):
-                            if not stage:
-                                return None
-                            if stage.get('stage') == 'IXSCAN':
-                                return stage.get('indexName', 'unknown')
-                            for key in ['inputStage', 'inputStages']:
-                                if key in stage:
-                                    if isinstance(stage[key], list):
-                                        for substage in stage[key]:
-                                            idx = find_index_scan(substage)
-                                            if idx:
-                                                return idx
-                                    else:
-                                        idx = find_index_scan(stage[key])
+
+                    def find_index_scan(stage):
+                        if not stage:
+                            return None
+                        if stage.get('stage') == 'IXSCAN':
+                            return stage.get('indexName', 'unknown')
+                        for key in ['inputStage', 'inputStages']:
+                            if key in stage:
+                                sub = stage[key]
+                                if isinstance(sub, list):
+                                    for s in sub:
+                                        idx = find_index_scan(s)
                                         if idx:
                                             return idx
-                            return None
-                        
-                        index_used = find_index_scan(stats.get('executionStages', {}))
-                
+                                else:
+                                    idx = find_index_scan(sub)
+                                    if idx:
+                                        return idx
+                        return None
+
+                    if query_info.get('_type') == 'aggregate':
+                        explain_result = collection.database.command(
+                            'explain',
+                            {
+                                'aggregate': collection.name,
+                                'pipeline': query_info['pipeline'],
+                                'cursor': {},
+                            },
+                            verbosity='executionStats',
+                        )
+                        # Aggregation explain may nest stats under stages[0].$cursor
+                        stats = explain_result.get('executionStats')
+                        if stats is None:
+                            for stage in explain_result.get('stages', []):
+                                cursor_stage = stage.get('$cursor', {})
+                                if 'executionStats' in cursor_stage:
+                                    stats = cursor_stage['executionStats']
+                                    break
+                        if stats:
+                            docs_examined = stats.get('totalDocsExamined', 0)
+                            keys_examined = stats.get('totalKeysExamined', 0)
+                            docs_returned = wrapped_collection.last_result_count
+                            if docs_examined == 0 and keys_examined > 0:
+                                docs_examined = keys_examined
+                            index_used = find_index_scan(stats.get('executionStages', {}))
+                    else:
+                        # find / find_one path
+                        find_cmd = {
+                            'find': collection.name,
+                            'filter': query_info.get('filter', {}),
+                        }
+                        if query_info.get('projection'):
+                            find_cmd['projection'] = query_info['projection']
+                        if query_info.get('limit'):
+                            find_cmd['limit'] = query_info['limit']
+                        if query_info.get('sort'):
+                            find_cmd['sort'] = query_info['sort']
+
+                        explain_result = collection.database.command(
+                            'explain', find_cmd, verbosity='allPlansExecution'
+                        )
+                        if 'executionStats' in explain_result:
+                            stats = explain_result['executionStats']
+                            docs_examined = stats.get('totalDocsExamined', 0)
+                            keys_examined = stats.get('totalKeysExamined', 0)
+                            docs_returned = wrapped_collection.last_result_count
+                            if docs_examined == 0 and keys_examined > 0:
+                                docs_examined = keys_examined
+                            index_used = find_index_scan(stats.get('executionStages', {}))
+
                 except Exception:
-                    # Explain failed, continue with None values
                     pass
             
             return OperationMetrics(

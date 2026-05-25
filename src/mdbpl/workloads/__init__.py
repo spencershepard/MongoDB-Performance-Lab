@@ -11,6 +11,7 @@ from .point_read import create_point_read_benchmark
 from .mixed import create_mixed_benchmark
 from .top_n import create_top_n_benchmark
 from .group_by import create_group_by_benchmark
+from .raw import create_raw_benchmark
 
 __all__ = [
     "create_range_scan_benchmark",
@@ -20,6 +21,7 @@ __all__ = [
     "create_mixed_benchmark",
     "create_top_n_benchmark",
     "create_group_by_benchmark",
+    "create_raw_benchmark",
     "REGISTRY",
 ]
 
@@ -34,4 +36,5 @@ REGISTRY = {
     "mixed":       create_mixed_benchmark,
     "top-n":       create_top_n_benchmark,
     "group-by":    create_group_by_benchmark,
+    "raw":         create_raw_benchmark,
 }

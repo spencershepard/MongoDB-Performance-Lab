@@ -3,6 +3,7 @@
 from .base import Demo, DemoStep, Command, ShellCommand, MongoshCommand, WorkloadCommand, CommandExecutor
 from .index_performance import IndexPerformanceDemo
 from .overindexing import OverindexingDemo
+from .compound_index import CompoundIndexDemo
 
 __all__ = [
     "Demo",
@@ -14,12 +15,14 @@ __all__ = [
     "CommandExecutor",
     "IndexPerformanceDemo",
     "OverindexingDemo",
+    "CompoundIndexDemo",
 ]
 
 # Registry of available demos
 DEMOS = {
     "index-performance": IndexPerformanceDemo,
     "overindexing": OverindexingDemo,
+    "compound-index": CompoundIndexDemo,
 }
 
 
