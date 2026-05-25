@@ -327,6 +327,19 @@ class WorkloadExecutor:
                             if docs_examined == 0 and keys_examined > 0:
                                 docs_examined = keys_examined
                             index_used = find_index_scan(stats.get('executionStages', {}))
+                        # Check $lookup stages for join strategy. Strategy info is at
+                        # the stage level (indexesUsed / collectionScans), not inside
+                        # the $lookup sub-dict where the old code looked.
+                        for explain_stage in explain_result.get('stages', []):
+                            if '$lookup' not in explain_stage:
+                                continue
+                            indexes_used = explain_stage.get('indexesUsed', [])
+                            if indexes_used:
+                                index_used = indexes_used[0]  # IndexedLoopJoin
+                                break
+                            elif explain_stage.get('collectionScans', 0) > 0:
+                                index_used = None  # NestedLoopJoin — surface as COLLSCAN
+                                break
                     else:
                         # find / find_one path
                         find_cmd = {
