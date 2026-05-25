@@ -6,6 +6,7 @@ from .overindexing import OverindexingDemo
 from .compound_index import CompoundIndexDemo
 from .aggregation_pipeline import AggregationPipelineDemo
 from .lookup import LookupDemo
+from .covering_index import CoveringIndexDemo
 
 __all__ = [
     "Demo",
@@ -20,6 +21,7 @@ __all__ = [
     "CompoundIndexDemo",
     "AggregationPipelineDemo",
     "LookupDemo",
+    "CoveringIndexDemo",
 ]
 
 # Registry of available demos
@@ -29,6 +31,7 @@ DEMOS = {
     "compound-index": CompoundIndexDemo,
     "aggregation-pipeline": AggregationPipelineDemo,
     "lookup": LookupDemo,
+    "covering-index": CoveringIndexDemo,
 }
 
 
