@@ -97,39 +97,74 @@ Missing compound indexes are the most common cause of slow queries.
 # get_demo_examples
 # ---------------------------------------------------------------------------
 
+def _discover_demos() -> dict:
+    """
+    Scan _DEMOS_DIR for *.py files (excluding __init__ and base), import each
+    via the mdbpl.demos package, and return {demo_id: (file_path, Demo_class)}.
+    Fully dynamic — dropping a new demo file in the directory is sufficient.
+    """
+    import importlib
+    import inspect
+    from mdbpl.demos.base import Demo
+
+    result = {}
+    for path in sorted(_DEMOS_DIR.glob("*.py")):
+        if path.stem in ("__init__", "base"):
+            continue
+        try:
+            mod = importlib.import_module(f"mdbpl.demos.{path.stem}")
+        except Exception:
+            continue
+        for _, cls in inspect.getmembers(mod, inspect.isclass):
+            if issubclass(cls, Demo) and cls is not Demo and hasattr(cls, "id"):
+                result[cls.id] = (path, cls)
+                break
+    return result
+
+
 @mcp.tool()
-def get_demo_examples(scenario: str = "all") -> str:
+def get_demo_examples(demo_name: str = "list") -> str:
     """
-    Return workflow instructions and working Demo class source code for the agent
-    to learn from and adapt. Always call this before generating a new workflow.
+    Return the workflow guide and Demo class source code for the agent to learn
+    from and adapt when building new benchmarks.
 
-    scenario: "all" | "index_comparison" | "write_performance"
-      index_comparison  — range queries, top-N, point reads; single or compound index
-      write_performance — insert throughput degradation from too many indexes
-      all               — both examples (default)
+    demo_name:
+      "list"   — (default) return the workflow guide + a compact registry of all
+                 available demos discovered from the demos directory. Use this
+                 first to pick the closest match to the user's scenario.
+      "<id>"   — return the workflow guide + full source for that specific demo.
+                 Call with demo_name="list" first to see valid IDs.
+
+    Workflow:
+      1. Call get_demo_examples() to see available demos and pick the closest match.
+      2. Call get_demo_examples(demo_name="<id>") to load that demo's full source.
+      3. Adapt it for the user's schema and run via execute_demo().
     """
-    parts = []
+    guide = _WORKFLOW_GUIDE.read_text(encoding="utf-8") if _WORKFLOW_GUIDE.exists() else ""
+    demos = _discover_demos()
 
-    if _WORKFLOW_GUIDE.exists():
-        parts.append(_WORKFLOW_GUIDE.read_text(encoding="utf-8"))
+    if demo_name == "list":
+        rows = []
+        for demo_id, (_, cls) in demos.items():
+            step_count = len(cls().steps())
+            rows.append(f"  {demo_id:<24} {step_count} steps  {cls.description}")
+        registry = (
+            "# Available Demo Examples\n\n"
+            + "\n".join(rows)
+            + "\n\nCall get_demo_examples(demo_name=\"<id>\") to load the full source for any demo."
+        )
+        return (guide + "\n\n---\n\n" + registry) if guide else registry
 
-    if scenario in ("all", "index_comparison"):
-        path = _DEMOS_DIR / "index_performance.py"
-        if path.exists():
-            parts.append(
-                "# Built-in example: src/mdbpl/demos/index_performance.py\n\n"
-                f"```python\n{path.read_text(encoding='utf-8')}\n```"
-            )
+    if demo_name not in demos:
+        available = ", ".join(f'"{k}"' for k in demos)
+        return f'Unknown demo "{demo_name}". Available: {available}. Use demo_name="list" to see descriptions.'
 
-    if scenario in ("all", "write_performance"):
-        path = _DEMOS_DIR / "overindexing.py"
-        if path.exists():
-            parts.append(
-                "# Built-in example: src/mdbpl/demos/overindexing.py\n\n"
-                f"```python\n{path.read_text(encoding='utf-8')}\n```"
-            )
-
-    return "\n\n---\n\n".join(parts)
+    path, _ = demos[demo_name]
+    source_block = (
+        f"# Source: src/mdbpl/demos/{path.name}\n\n"
+        f"```python\n{path.read_text(encoding='utf-8')}\n```"
+    )
+    return (guide + "\n\n---\n\n" + source_block) if guide else source_block
 
 
 # ---------------------------------------------------------------------------
@@ -288,22 +323,28 @@ def get_schema(mongodb_uri: str, collection: str, database: str = "perflab") -> 
 def _extract_lookup_stages(explain_result: dict) -> list:
     """
     Scan the top-level stages array for $lookup entries and extract strategy info.
-    MongoDB reports $lookup join strategy (IndexedLoopJoin vs NestedLoopJoin) here,
-    not inside executionStages — so _walk_stages misses it entirely.
+    Strategy is inferred from stage-level sibling keys (indexesUsed, collectionScans),
+    not from inside the $lookup sub-dict where it does not appear in MongoDB 7.0.
     """
     lookup_info = []
     for stage in explain_result.get("stages", []):
         lookup = stage.get("$lookup")
         if not lookup or not isinstance(lookup, dict):
             continue
+        indexes_used = stage.get("indexesUsed", [])
+        collection_scans = stage.get("collectionScans", 0)
         info = {
             "from": lookup.get("from", "unknown"),
             "localField": lookup.get("localField", ""),
             "foreignField": lookup.get("foreignField", ""),
-            "strategy": lookup.get("strategy", "unknown"),
         }
-        if "indexName" in lookup:
-            info["indexName"] = lookup["indexName"]
+        if indexes_used:
+            info["strategy"] = "IndexedLoopJoin"
+            info["indexName"] = indexes_used[0]
+        elif collection_scans > 0:
+            info["strategy"] = "NestedLoopJoin"
+        else:
+            info["strategy"] = "unknown"
         lookup_info.append(info)
     return lookup_info
 
