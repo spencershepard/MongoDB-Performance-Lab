@@ -38,9 +38,67 @@ class ShellCommand(Command):
 @dataclass
 class MongoshCommand(Command):
     """A mongosh script command."""
-    
+
     def __init__(self, script: str, collapse_output: bool = False):
         super().__init__(type="mongosh", raw=script, collapse_output=collapse_output)
+
+
+@dataclass
+class WorkloadCommand(Command):
+    """An inline Python workload that runs with concurrent PyMongo threads.
+
+    The ``code`` string defines operations using the @benchmark.operation decorator.
+    The following names are available in the execution namespace:
+      benchmark, random, uniform, zipfian
+
+    Example::
+
+        WorkloadCommand(
+            code='''
+@benchmark.operation(weight=80, name="insert")
+def insert_doc(collection):
+    collection.insert_one({"score": random.random()})
+
+@benchmark.operation(weight=20, name="update")
+def update_doc(collection):
+    collection.update_one({"_id": f"user{random.randint(0, 9999)}"}, {"$set": {"score": random.random()}})
+''',
+            duration="15s",
+            threads=8,
+            tag="baseline",
+        )
+    """
+
+    def __init__(
+        self,
+        code: str,
+        duration: str = "15s",
+        threads: int = 4,
+        tag: str = "run",
+        name: str = "inline-workload",
+        database: str = "perflab",
+        collection: str = "usertable",
+        collapse_output: bool = False,
+    ):
+        super().__init__(type="workload", raw=code, collapse_output=collapse_output)
+        self.duration = duration
+        self.threads = threads
+        self.tag = tag
+        self.workload_name = name
+        self.database = database
+        self.collection_name = collection
+
+    def to_dict(self) -> dict:
+        d = super().to_dict()
+        d.update({
+            "duration": self.duration,
+            "threads": self.threads,
+            "tag": self.tag,
+            "workload_name": self.workload_name,
+            "database": self.database,
+            "collection": self.collection_name,
+        })
+        return d
 
 
 @dataclass
@@ -200,12 +258,100 @@ class CommandExecutor:
             except:
                 pass
     
+    def execute_workload(self, command: "WorkloadCommand") -> dict:
+        """Execute an inline Python workload with concurrent PyMongo threads."""
+        from ..workload import Benchmark
+        from ..executor import WorkloadExecutor, parse_duration
+        from ..distributions import uniform, zipfian
+        from ..storage import BenchmarkStorage
+        import random as random_module
+
+        if self.verbose:
+            print(f"  [workload] Running '{command.workload_name}' ({command.threads} threads, {command.duration})...")
+
+        benchmark = Benchmark(
+            name=command.workload_name,
+            database=command.database,
+            collection=command.collection_name,
+        )
+
+        namespace = {
+            "benchmark": benchmark,
+            "random": random_module,
+            "uniform": uniform,
+            "zipfian": zipfian,
+        }
+
+        try:
+            exec(command.raw, namespace)
+        except Exception as e:
+            return {"exit_code": 1, "stdout": "", "stderr": f"Workload code error: {e}", "success": False}
+
+        if not benchmark.operations:
+            return {
+                "exit_code": 1,
+                "stdout": "",
+                "stderr": "No operations defined. Use @benchmark.operation(weight=N) decorator.",
+                "success": False,
+            }
+
+        duration_seconds = parse_duration(command.duration)
+        executor = WorkloadExecutor(benchmark, self.mongodb_uri, record_count=10000)
+
+        try:
+            result = executor.run_threaded(duration_seconds, threads=command.threads)
+        except Exception as e:
+            return {"exit_code": 1, "stdout": "", "stderr": f"Workload execution failed: {e}", "success": False}
+
+        # Save to SQLite so mdbpl compare can find this run by tag
+        db_path = os.getenv("BENCHMARK_DB", "/data/benchmarks.db")
+        run_id = None
+        try:
+            storage = BenchmarkStorage(db_path=db_path)
+            run_id = storage.save_result(result, tag=command.tag)
+        except Exception as e:
+            if self.verbose:
+                print(f"  Warning: Could not save result to storage: {e}")
+
+        lines = [
+            f"Workload:   {command.workload_name}",
+            f"Tag:        {command.tag}",
+            f"Threads:    {command.threads}",
+            f"Duration:   {result.duration_seconds:.1f}s",
+            f"Throughput: {result.operations_per_second:.0f} ops/sec",
+            f"Latency:    p50={result.latency_p50:.1f}ms  p95={result.latency_p95:.1f}ms  p99={result.latency_p99:.1f}ms",
+            f"Operations: {result.total_operations} total ({result.successful_operations} ok, {result.failed_operations} failed)",
+        ]
+        if result.total_docs_examined > 0:
+            lines.append(
+                f"Docs examined: {result.total_docs_examined:,}  |  "
+                f"index scans: {result.index_scans}  |  collection scans: {result.collection_scans}"
+            )
+        if run_id:
+            lines.append(f"Saved as run #{run_id} (tag: {command.tag})")
+
+        stdout = "\n".join(lines)
+        if self.verbose:
+            print(stdout)
+
+        return {
+            "exit_code": 0,
+            "stdout": stdout,
+            "stderr": "",
+            "success": True,
+            "benchmark_result": result,
+            "run_id": run_id,
+            "tag": command.tag,
+        }
+
     def execute_command(self, command: Command) -> dict:
         """Execute a command and return result."""
         if command.type == "shell":
             return self.execute_shell(command.raw)
         elif command.type == "mongosh":
             return self.execute_mongosh(command.raw)
+        elif command.type == "workload":
+            return self.execute_workload(command)
         else:
             return {
                 "exit_code": 1,

@@ -1,6 +1,6 @@
 """Demo modules for MongoDB Performance Lab."""
 
-from .base import Demo, DemoStep, Command, ShellCommand, MongoshCommand, CommandExecutor
+from .base import Demo, DemoStep, Command, ShellCommand, MongoshCommand, WorkloadCommand, CommandExecutor
 from .index_performance import IndexPerformanceDemo
 from .overindexing import OverindexingDemo
 
@@ -10,6 +10,7 @@ __all__ = [
     "Command",
     "ShellCommand",
     "MongoshCommand",
+    "WorkloadCommand",
     "CommandExecutor",
     "IndexPerformanceDemo",
     "OverindexingDemo",

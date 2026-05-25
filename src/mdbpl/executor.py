@@ -354,6 +354,74 @@ class WorkloadExecutor:
                 error=str(e)
             )
     
+    def run_threaded(self, duration_seconds: float, threads: int = 4) -> BenchmarkResult:
+        """Run the workload with multiple concurrent threads.
+
+        Each thread gets its own Collection reference against the shared MongoClient
+        connection pool. Metrics are merged after all threads complete.
+
+        Args:
+            duration_seconds: How long to run the workload
+            threads: Number of concurrent worker threads
+
+        Returns:
+            Aggregated BenchmarkResult across all threads
+        """
+        import threading
+
+        # socketTimeoutMS caps individual operation time so threads can re-check
+        # end_time even when MongoDB is under heavy write load.
+        client = MongoClient(self.mongodb_uri, socketTimeoutMS=10000)
+        db = client[self.benchmark.database]
+
+        # Pre-allocate per-thread lists — no lock needed during the hot loop
+        thread_metrics: List[List[OperationMetrics]] = [[] for _ in range(threads)]
+
+        start_time = time.time()
+        end_time = start_time + duration_seconds
+
+        def worker(idx: int):
+            collection = db[self.benchmark.collection]
+            local = thread_metrics[idx]
+            while time.time() < end_time:
+                operation = self._select_operation()
+                local.append(self._execute_python_operation(operation, collection))
+
+        thread_list = [threading.Thread(target=worker, args=(i,), daemon=True) for i in range(threads)]
+        for t in thread_list:
+            t.start()
+        for t in thread_list:
+            t.join()
+
+        client.close()
+
+        actual_duration = time.time() - start_time
+
+        result = BenchmarkResult(
+            workload_name=self.benchmark.name,
+            duration_seconds=actual_duration,
+            total_operations=0,
+            successful_operations=0,
+            failed_operations=0,
+            operations_per_second=0.0,
+        )
+
+        for metrics_list in thread_metrics:
+            for m in metrics_list:
+                result.total_operations += 1
+                if m.success:
+                    result.successful_operations += 1
+                else:
+                    result.failed_operations += 1
+                result.add_operation(m)
+
+        if actual_duration > 0:
+            result.operations_per_second = result.total_operations / actual_duration
+        result.calculate_percentiles()
+        result.extrapolate_sampled_metrics()
+
+        return result
+
     def run(self, duration_seconds: float, tag: str = "baseline") -> BenchmarkResult:
         """
         Run the workload for specified duration.
