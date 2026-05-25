@@ -3,11 +3,12 @@
 Runs inside the perflab container via:
   docker compose exec -i perflab python mcp/server.py
 
-Exposes 5 tools to VS Code agents:
+Exposes 6 tools to VS Code agents:
   get_analysis_guide  — how to find MongoDB queries in user code
   get_demo_examples   — workflow instructions + built-in demo source code
   get_best_practices  — indexing and query optimization reference
   get_schema          — introspect a live MongoDB collection
+  explain_query       — run explain("executionStats") on any pipeline or find query
   execute_demo        — run an agent-generated Demo subclass, return results
 """
 
@@ -276,6 +277,213 @@ def get_schema(mongodb_uri: str, collection: str, database: str = "perflab") -> 
             "field_types": field_types,
         }
         return json.dumps(result, indent=2)
+    finally:
+        client.close()
+
+
+# ---------------------------------------------------------------------------
+# explain_query
+# ---------------------------------------------------------------------------
+
+def _extract_lookup_stages(explain_result: dict) -> list:
+    """
+    Scan the top-level stages array for $lookup entries and extract strategy info.
+    MongoDB reports $lookup join strategy (IndexedLoopJoin vs NestedLoopJoin) here,
+    not inside executionStages — so _walk_stages misses it entirely.
+    """
+    lookup_info = []
+    for stage in explain_result.get("stages", []):
+        lookup = stage.get("$lookup")
+        if not lookup or not isinstance(lookup, dict):
+            continue
+        info = {
+            "from": lookup.get("from", "unknown"),
+            "localField": lookup.get("localField", ""),
+            "foreignField": lookup.get("foreignField", ""),
+            "strategy": lookup.get("strategy", "unknown"),
+        }
+        if "indexName" in lookup:
+            info["indexName"] = lookup["indexName"]
+        lookup_info.append(info)
+    return lookup_info
+
+
+def _walk_stages(stage):
+    """
+    Recursively walk an executionStages tree.
+    Returns (scan_types, index_names, has_in_memory_sort).
+    """
+    if not stage or not isinstance(stage, dict):
+        return [], [], False
+
+    scan_types, index_names, has_sort = [], [], False
+    name = stage.get("stage", "")
+
+    if name == "IXSCAN":
+        scan_types.append("IXSCAN")
+        if "indexName" in stage:
+            index_names.append(stage["indexName"])
+    elif name == "COLLSCAN":
+        scan_types.append("COLLSCAN")
+    elif name == "SORT":
+        has_sort = True
+
+    for key in ("inputStage", "inputStages", "outerStage", "innerStage"):
+        sub = stage.get(key)
+        if not sub:
+            continue
+        items = sub if isinstance(sub, list) else [sub]
+        for s in items:
+            st, ix, hs = _walk_stages(s)
+            scan_types.extend(st)
+            index_names.extend(ix)
+            has_sort = has_sort or hs
+
+    return scan_types, index_names, has_sort
+
+
+def _summarise_stats(stats: dict, has_sort: bool, scan_types: list, index_names: list) -> dict:
+    docs_examined = stats.get("totalDocsExamined", 0)
+    keys_examined = stats.get("totalKeysExamined", 0)
+    docs_returned = stats.get("nReturned", 0)
+    exec_ms = stats.get("executionTimeMillis", 0)
+
+    if docs_examined == 0 and keys_examined > 0:
+        docs_examined = keys_examined
+
+    ratio = round(docs_examined / docs_returned, 1) if docs_returned > 0 else None
+
+    primary_scan = "IXSCAN" if "IXSCAN" in scan_types else ("COLLSCAN" if "COLLSCAN" in scan_types else "UNKNOWN")
+
+    if primary_scan == "COLLSCAN":
+        verdict = "COLLSCAN — no usable index found. Add an index on the filter/sort fields."
+    elif primary_scan == "IXSCAN" and has_sort:
+        verdict = "IXSCAN with in-memory SORT — index used for filtering but sort is not covered. Extend the index to include the sort field (ESR rule)."
+    elif primary_scan == "IXSCAN" and ratio is not None and ratio > 10:
+        verdict = f"IXSCAN but low efficiency (examined/returned = {ratio}:1) — consider a more selective compound index."
+    elif primary_scan == "IXSCAN":
+        verdict = "EFFICIENT — IXSCAN with no in-memory sort. Index covers this query well."
+    else:
+        verdict = "Unable to determine scan type from explain output."
+
+    return {
+        "scan_type": primary_scan,
+        "index_names": list(dict.fromkeys(index_names)),  # deduplicate, preserve order
+        "in_memory_sort": has_sort,
+        "docs_examined": docs_examined,
+        "keys_examined": keys_examined,
+        "docs_returned": docs_returned,
+        "examined_to_returned_ratio": ratio,
+        "execution_time_ms": exec_ms,
+        "verdict": verdict,
+    }
+
+
+@mcp.tool()
+def explain_query(
+    mongodb_uri: str,
+    collection: str,
+    database: str = "perflab",
+    pipeline: str = "",
+    filter: str = "",
+    sort: str = "",
+    projection: str = "",
+) -> str:
+    """
+    Run explain("executionStats") on a MongoDB query and return a structured
+    summary: scan type, index used, docs examined vs returned, in-memory sort
+    detection, efficiency verdict, and the raw explain output.
+
+    Provide either:
+      pipeline    — JSON array string for an aggregation query
+      filter      — JSON object string for a find() filter (optionally with sort/projection)
+
+    Both pipeline and filter can be left empty but at least one must be provided.
+
+    Returns JSON with keys:
+      scan_type, index_names, in_memory_sort, docs_examined, keys_examined,
+      docs_returned, examined_to_returned_ratio, execution_time_ms, verdict,
+      raw_explain (full explain output for deep inspection)
+    """
+    import json as _json
+    from pymongo import MongoClient
+
+    client = MongoClient(mongodb_uri, serverSelectionTimeoutMS=5000)
+    try:
+        db = client[database]
+        coll = db[collection]
+
+        if pipeline and pipeline.strip():
+            try:
+                parsed_pipeline = _json.loads(pipeline)
+            except _json.JSONDecodeError as e:
+                return _json.dumps({"error": f"Invalid pipeline JSON: {e}"})
+
+            explain_result = db.command(
+                "explain",
+                {"aggregate": collection, "pipeline": parsed_pipeline, "cursor": {}},
+                verbosity="executionStats",
+            )
+
+            stats = explain_result.get("executionStats")
+            exec_stages = None
+            if stats is None:
+                for stage in explain_result.get("stages", []):
+                    cursor_stage = stage.get("$cursor", {})
+                    if "executionStats" in cursor_stage:
+                        stats = cursor_stage["executionStats"]
+                        exec_stages = cursor_stage["executionStats"].get("executionStages", {})
+                        break
+            if stats and exec_stages is None:
+                exec_stages = stats.get("executionStages", {})
+
+        elif filter and filter.strip():
+            try:
+                parsed_filter = _json.loads(filter)
+            except _json.JSONDecodeError as e:
+                return _json.dumps({"error": f"Invalid filter JSON: {e}"})
+
+            parsed_sort = _json.loads(sort) if sort and sort.strip() else None
+            parsed_proj = _json.loads(projection) if projection and projection.strip() else None
+
+            find_cmd = {"find": collection, "filter": parsed_filter}
+            if parsed_sort:
+                find_cmd["sort"] = parsed_sort
+            if parsed_proj:
+                find_cmd["projection"] = parsed_proj
+
+            explain_result = db.command("explain", find_cmd, verbosity="executionStats")
+            stats = explain_result.get("executionStats")
+            exec_stages = stats.get("executionStages", {}) if stats else {}
+
+        else:
+            return _json.dumps({"error": "Provide either 'pipeline' (JSON array) or 'filter' (JSON object)."})
+
+        if not stats:
+            return _json.dumps({
+                "error": "No executionStats found in explain output.",
+                "raw_explain": explain_result,
+            }, default=str)
+
+        scan_types, index_names, has_sort = _walk_stages(exec_stages)
+        summary = _summarise_stats(stats, has_sort, scan_types, index_names)
+
+        # $lookup stages report strategy separately from executionStages.
+        lookup_stages = _extract_lookup_stages(explain_result)
+        if lookup_stages:
+            summary["lookup_stages"] = lookup_stages
+            unindexed = [s for s in lookup_stages if s.get("strategy") == "NestedLoopJoin"]
+            if unindexed:
+                froms = ", ".join(s["from"] for s in unindexed)
+                summary["verdict"] = (
+                    f"$lookup NestedLoopJoin on [{froms}] — no index on the foreign field. "
+                    f"Add an index on {{{unindexed[0]['foreignField']}: 1}} in the '{unindexed[0]['from']}' collection."
+                )
+
+        summary["raw_explain"] = explain_result
+
+        return _json.dumps(summary, default=str)
+
     finally:
         client.close()
 

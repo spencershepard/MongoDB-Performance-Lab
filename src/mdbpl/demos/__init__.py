@@ -4,6 +4,8 @@ from .base import Demo, DemoStep, Command, ShellCommand, MongoshCommand, Workloa
 from .index_performance import IndexPerformanceDemo
 from .overindexing import OverindexingDemo
 from .compound_index import CompoundIndexDemo
+from .aggregation_pipeline import AggregationPipelineDemo
+from .lookup import LookupDemo
 
 __all__ = [
     "Demo",
@@ -16,6 +18,8 @@ __all__ = [
     "IndexPerformanceDemo",
     "OverindexingDemo",
     "CompoundIndexDemo",
+    "AggregationPipelineDemo",
+    "LookupDemo",
 ]
 
 # Registry of available demos
@@ -23,6 +27,8 @@ DEMOS = {
     "index-performance": IndexPerformanceDemo,
     "overindexing": OverindexingDemo,
     "compound-index": CompoundIndexDemo,
+    "aggregation-pipeline": AggregationPipelineDemo,
+    "lookup": LookupDemo,
 }
 
 

@@ -16,11 +16,15 @@ from pymongo import MongoClient
 class FieldSpec:
     name: str
     type: str  # "string" | "int" | "float" | "date" | "bool" | "choice"
+              # | "formatted_sequential" | "ref"
     length: int = 20        # string: character count
     min_val: float = 0      # int/float: lower bound (inclusive)
     max_val: float = 1_000_000  # int/float: upper bound (exclusive)
     choices: List[Any] = field(default_factory=list)  # type="choice": pool to sample
     sequential: bool = False  # if True, value equals the document's insertion index
+    format_string: str = ""   # formatted_sequential: e.g. "cust_{:06d}"
+    ref_collection: str = ""  # ref: collection to sample foreign key values from
+    ref_field: str = ""       # ref: field name to sample in the ref collection
 
 
 @dataclass
@@ -32,9 +36,15 @@ class SchemaSpec:
 class DocumentGenerator:
     _CHARS = string.ascii_lowercase + string.digits
 
-    def __init__(self, schema: SchemaSpec, record_count: int) -> None:
+    def __init__(
+        self,
+        schema: SchemaSpec,
+        record_count: int,
+        ref_pools: Optional[Dict[str, List]] = None,
+    ) -> None:
         self._schema = schema
         self._record_count = record_count
+        self._ref_pools: Dict[str, List] = ref_pools or {}
 
     def generate(self, index: int) -> Dict[str, Any]:
         doc: Dict[str, Any] = {"_id": ObjectId()}
@@ -63,6 +73,16 @@ class DocumentGenerator:
             return now - delta
         if t == "choice":
             return random.choice(spec.choices)
+        if t == "formatted_sequential":
+            return spec.format_string.format(index)
+        if t == "ref":
+            pool = self._ref_pools.get(spec.name)
+            if not pool:
+                raise ValueError(
+                    f"No ref pool for field '{spec.name}'. "
+                    f"Load '{spec.ref_collection}' before '{self._schema.name}'."
+                )
+            return random.choice(pool)
         raise ValueError(f"Unknown field type: {t!r}")
 
 
@@ -146,6 +166,32 @@ SCHEMA_PRESETS: Dict[str, SchemaSpec] = {
             FieldSpec("score", "int", sequential=True),
         ],
     ),
+    # customers + orders are designed to work together for $lookup demos.
+    # Load customers first, then orders — orders.customerId references customers.customerId.
+    "customers": SchemaSpec(
+        name="customers",
+        fields=[
+            FieldSpec("customerId", "formatted_sequential", format_string="cust_{:06d}"),
+            FieldSpec("name", "string", length=16),
+            FieldSpec("email", "string", length=24),
+            FieldSpec("region", "choice", choices=["NA", "EU", "APAC", "SA"]),
+            FieldSpec("tier", "choice", choices=["Bronze", "Silver", "Gold", "Platinum"]),
+            FieldSpec("score", "int", sequential=True),
+        ],
+    ),
+    "orders": SchemaSpec(
+        name="orders",
+        fields=[
+            # ref type: samples real customerId values from the customers collection at load time.
+            # Requires customers collection to be loaded first in the same database.
+            FieldSpec("customerId", "ref", ref_collection="customers", ref_field="customerId"),
+            FieldSpec("amount", "float", min_val=1.0, max_val=5000.0),
+            FieldSpec("status", "choice", choices=["pending", "processing", "shipped", "delivered", "cancelled"]),
+            FieldSpec("productId", "string", length=12),
+            FieldSpec("createdAt", "date"),
+            FieldSpec("score", "int", sequential=True),
+        ],
+    ),
 }
 
 
@@ -166,12 +212,33 @@ def load_generated_data(
     client = MongoClient(mongodb_uri)
     coll = client[database][collection]
 
+    # Build ref pools for any "ref" type fields before dropping the collection.
+    ref_pools: Dict[str, List] = {}
+    for spec in schema.fields:
+        if spec.type == "ref" and spec.ref_collection and spec.ref_field:
+            ref_coll = client[database][spec.ref_collection]
+            docs = list(
+                ref_coll.find(
+                    {spec.ref_field: {"$exists": True}},
+                    {spec.ref_field: 1, "_id": 0},
+                ).limit(10_000)
+            )
+            values = [d[spec.ref_field] for d in docs if spec.ref_field in d]
+            if not values:
+                client.close()
+                raise ValueError(
+                    f"No documents found in '{database}.{spec.ref_collection}.{spec.ref_field}'. "
+                    f"Load the '{spec.ref_collection}' collection first."
+                )
+            ref_pools[spec.name] = values
+            print(f"  Sampled {len(values):,} values from {spec.ref_collection}.{spec.ref_field} for '{spec.name}'")
+
     if drop_existing:
         coll.drop()
         print("✓ Collection dropped")
         print()
 
-    gen = DocumentGenerator(schema, record_count)
+    gen = DocumentGenerator(schema, record_count, ref_pools=ref_pools)
     inserted = 0
     report_every = max(batch_size, 10_000 - (10_000 % batch_size))
 
