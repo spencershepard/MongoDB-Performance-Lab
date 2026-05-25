@@ -1,212 +1,278 @@
-"""Overindexing Demo - Shows write performance degradation with too many indexes."""
+"""
+Overindexing Demo - Shows write performance degradation from excessive indexes.
 
-from datetime import datetime
-from pymongo import MongoClient
-import os
+PATTERN: baseline (no indexes) → one index → over-indexed (9 indexes) → compare
 
-from .base import Demo, DemoStep, DemoResult
-from ..ycsb import load_ycsb_data
-from ..dsl.loader import WorkloadLoader
-from ..executor import WorkloadExecutor
-from ..storage import BenchmarkStorage
+KEY INSIGHT: Every write operation (insert, update, delete) must update ALL indexes
+on the collection. With 9 indexes, each insert touches 9 B-tree structures instead
+of 1, multiplying I/O and lock contention under concurrent load.
+
+WORKLOAD: mdbpl run --workload insert --batch-size 1 --threads 8
+- insert_one per operation (no batch pipelining) maximises per-op index lock cycles
+- 8 concurrent threads surface B-tree write-lock contention
+- 50k dataset pushes index B-trees beyond WiredTiger's warm cache
+"""
+
+from typing import List
+from .base import Demo, DemoStep, ShellCommand, MongoshCommand
+
+_INSERT_CMD = (
+    "mdbpl run --workload insert"
+    " --fields score,field0,field1,field2,field3,field4,field5,field6,field7"
+    " --batch-size 1 --threads 8 --duration 30s"
+)
 
 
 class OverindexingDemo(Demo):
     """
-    Demonstrates write performance degradation with too many indexes.
-    
-    Runs a write-heavy workload with:
-    1. No indexes (baseline)
-    2. One index (slight overhead)
-    3. Ten indexes (significant overhead)
-    
-    Shows that every write must update all indexes, causing slowdown.
+    Demonstrates write performance degradation caused by maintaining too many indexes.
+
+    Pattern: drop-indexes → baseline → add-one-index → measure → add-eight-more → measure → compare
+    Workload: mdbpl run --workload insert with 8 concurrent threads, insert_one, 50k dataset
+
+    Without indexes: MongoDB only writes the document and updates _id B-tree (1 write path)
+    With 9 indexes:  MongoDB writes the document + updates 9 B-trees (9x write amplification)
     """
-    
-    name = "overindexing"
+
+    id = "overindexing"
     title = "Over-Indexing Performance Impact"
-    description = "Shows how too many indexes degrade write performance"
-    
-    def __init__(self):
-        self.mongodb_uri = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
-        self.client = MongoClient(self.mongodb_uri)
-        self.db = self.client["perflab"]
-        self.collection = self.db["usertable"]
-        self.storage = BenchmarkStorage()
-    
-    def run(self) -> DemoResult:
-        """Execute the demo."""
-        result = DemoResult(
-            demo_name=self.name,
-            title=self.title,
-            started_at=datetime.now()
-        )
-        
-        try:
-            # Step 1: Load data
-            step1 = DemoStep(
-                name="load_data",
-                description="Loading 100,000 test records",
-                started_at=datetime.now()
-            )
-            load_ycsb_data(
-                mongodb_uri=self.mongodb_uri,
-                record_count=100000,
-                drop_existing=True
-            )
-            
-            # Add sortable numeric field
-            count = self.collection.count_documents({})
-            for i, doc in enumerate(self.collection.find({}, {"_id": 1})):
-                self.collection.update_one(
-                    {"_id": doc["_id"]},
-                    {"$set": {"score": i}}
-                )
-            
-            step1.completed_at = datetime.now()
-            step1.result = {"records": count, "note": "Added 'score' field"}
-            result.steps.append(step1)
-            
-            # Step 2: Baseline benchmark (no indexes)
-            step2 = DemoStep(
-                name="baseline_benchmark",
-                description="Running write-heavy workload with NO indexes",
-                started_at=datetime.now()
-            )
-            
-            # Drop any existing indexes to ensure clean baseline
-            self.collection.drop_indexes()
-            
-            workload_spec = WorkloadLoader.load_builtin("write-heavy")
-            executor = WorkloadExecutor(
-                workload=workload_spec,
-                mongodb_uri=self.mongodb_uri,
-                record_count=100000
-            )
-            
-            baseline_result = executor.run(
-                duration_seconds=10,
-                tag="no-index"
-            )
-            
-            self.storage.save_result(baseline_result, tag="no-index")
-            step2.completed_at = datetime.now()
-            step2.result = {
-                "throughput": baseline_result.operations_per_second,
-                "latency_p50": baseline_result.latency_p50,
-                "latency_p95": baseline_result.latency_p95,
-                "total_operations": baseline_result.total_operations,
-            }
-            result.steps.append(step2)
-            
-            # Step 3: Create one index
-            step3 = DemoStep(
-                name="create_one_index",
-                description="Creating 1 index on score field",
-                started_at=datetime.now()
-            )
-            
-            self.collection.create_index("score")
-            step3.completed_at = datetime.now()
-            step3.result = {"indexes": ["score_1"]}
-            result.steps.append(step3)
-            
-            # Step 4: Benchmark with one index
-            step4 = DemoStep(
-                name="one_index_benchmark",
-                description="Running workload with 1 index",
-                started_at=datetime.now()
-            )
-            
-            one_index_result = executor.run(
-                duration_seconds=10,
-                tag="one-index"
-            )
-            
-            self.storage.save_result(one_index_result, tag="one-index")
-            step4.completed_at = datetime.now()
-            step4.result = {
-                "throughput": one_index_result.operations_per_second,
-                "latency_p50": one_index_result.latency_p50,
-                "latency_p95": one_index_result.latency_p95,
-                "total_operations": one_index_result.total_operations,
-            }
-            result.steps.append(step4)
-            
-            # Step 5: Create many indexes
-            step5 = DemoStep(
-                name="create_many_indexes",
-                description="Creating 9 additional indexes (10 total)",
-                started_at=datetime.now()
-            )
-            
-            # Create indexes on field0-field8 (binary fields) to show overhead
-            for i in range(9):
-                self.collection.create_index(f"field{i}")
-            
-            step5.completed_at = datetime.now()
-            step5.result = {
-                "indexes": ["score_1"] + [f"field{i}_1" for i in range(9)],
-                "total": 10
-            }
-            result.steps.append(step5)
-            
-            # Step 6: Benchmark with many indexes
-            step6 = DemoStep(
-                name="many_indexes_benchmark",
-                description="Running workload with 10 indexes",
-                started_at=datetime.now()
-            )
-            
-            many_indexes_result = executor.run(
-                duration_seconds=10,
-                tag="over-indexed"
-            )
-            
-            self.storage.save_result(many_indexes_result, tag="over-indexed")
-            step6.completed_at = datetime.now()
-            step6.result = {
-                "throughput": many_indexes_result.operations_per_second,
-                "latency_p50": many_indexes_result.latency_p50,
-                "latency_p95": many_indexes_result.latency_p95,
-                "total_operations": many_indexes_result.total_operations,
-            }
-            result.steps.append(step6)
-            
-            # Step 7: Compare results
-            step7 = DemoStep(
-                name="compare",
-                description="Comparing results",
-                started_at=datetime.now()
-            )
-            
-            throughput_degradation = (
-                (baseline_result.operations_per_second - many_indexes_result.operations_per_second) 
-                / baseline_result.operations_per_second * 100
-            )
-            latency_degradation = (
-                (many_indexes_result.latency_p95 - baseline_result.latency_p95)
-                / baseline_result.latency_p95 * 100
-            )
-            
-            step7.completed_at = datetime.now()
-            step7.result = {
-                "baseline": step2.result,
-                "one_index": step4.result,
-                "over_indexed": step6.result,
-                "degradation": {
-                    "throughput_percent": round(throughput_degradation, 2),
-                    "latency_p95_percent": round(latency_degradation, 2),
-                }
-            }
-            result.steps.append(step7)
-            
-            result.completed_at = datetime.now()
-            result.success = True
-            
-        except Exception as e:
-            result.completed_at = datetime.now()
-            result.success = False
-            result.error = str(e)
-        
-        return result
+    description = "Demonstrates write performance degradation caused by maintaining too many indexes"
+    markdown_file = ""
+
+    def steps(self) -> List[DemoStep]:
+        return [
+
+            # STEP 1: Initialize test data
+            DemoStep(
+                id="init",
+                title="Initialize Test Dataset",
+                description="Load 50,000 YCSB documents as the write target",
+                markdown="""
+## Initialize Test Data
+
+Load 50,000 YCSB documents. The write workload inserts additional documents
+into this collection — we benchmark how quickly writes land when different
+numbers of secondary indexes must be maintained.
+
+**Why 50k?** Index B-tree overhead only becomes measurable once index pages
+exceed WiredTiger's warm cache. With 10k documents, all 9 index B-trees fit
+entirely in memory and updates are essentially free. At 50k, index pages
+start spilling to disk under concurrent write pressure, making the overhead
+visible. Scale further to 100k–1M for more dramatic numbers in production
+comparisons.
+
+**Workload shape:**
+- `mdbpl run --workload insert` — one document per operation (`insert_one`)
+- Fields written: `score`, `field0`–`field7` (9 fields, all YCSB-native)
+- 8 concurrent threads — B-tree write-lock contention grows with thread count
+- 30s duration — allows WiredTiger cache pressure to build and stabilise
+
+> **Note on local vs production numbers:** This demo runs inside Docker on
+> localhost. WiredTiger's cache is warm and disk I/O is fast SSD or tmpfs.
+> In a production deployment — especially on spinning disk, a loaded Atlas
+> cluster, or a replica set requiring `w:majority` journal flushes — the
+> overindexing penalty is typically 2–5× larger than what you'll see here.
+> The *relative* difference between runs is what matters.
+""",
+                commands=[
+                    ShellCommand("mdbpl init --scale 50k", collapse_output=False),
+                ]
+            ),
+
+            # STEP 2: Baseline — no secondary indexes
+            DemoStep(
+                id="baseline",
+                title="Baseline Write Performance (No Secondary Indexes)",
+                description="Drop all secondary indexes, then run the insert workload",
+                markdown="""
+## Baseline: No Secondary Indexes
+
+Drop all secondary indexes so only the required `_id` index remains.
+This measures the true cost of the write itself, with zero index maintenance overhead.
+
+**What MongoDB does on each insert (no secondary indexes):**
+1. Write document to collection
+2. Update `_id` B-tree (mandatory, always present)
+
+**Expected:** High throughput, low latency — writes go almost directly to WiredTiger.
+The `_id` index update is unavoidable and represents the theoretical minimum write cost.
+8 threads will be competing, but with only one B-tree to update they rarely block each other.
+""",
+                commands=[
+                    MongoshCommand("""
+db.usertable.dropIndexes();
+print("✓ Dropped all secondary indexes");
+print("");
+print("Remaining indexes:");
+db.usertable.getIndexes().forEach(function(idx) {
+    print("  " + idx.name + ": " + JSON.stringify(idx.key));
+});
+""", collapse_output=False),
+                    ShellCommand(
+                        f"{_INSERT_CMD} --tag no-index",
+                        collapse_output=False,
+                    ),
+                ]
+            ),
+
+            # STEP 3: Add one index, measure overhead
+            DemoStep(
+                id="one-index",
+                title="Write Performance With One Index",
+                description="Add a single index on score, re-run the same workload",
+                markdown="""
+## One Index: Minimal Overhead
+
+Add a single index on the `score` field — a common optimization for range queries.
+
+**What MongoDB does on each insert (1 secondary index):**
+1. Write document to collection
+2. Update `_id` B-tree
+3. Update `score` B-tree ← new cost
+
+The overhead of one index is usually modest (5–15%) because WiredTiger batches
+index updates efficiently. This step establishes that **some** indexing is acceptable;
+the problem emerges when indexes multiply.
+
+**Expected:** Slight throughput reduction vs baseline — typically 5–15% at this scale.
+One index means one additional B-tree to lock per insert, but WiredTiger handles
+single-index contention well even under 8 threads.
+""",
+                commands=[
+                    MongoshCommand("""
+db.usertable.createIndex({score: 1});
+print("✓ Created index on score");
+print("");
+print("Current indexes:");
+db.usertable.getIndexes().forEach(function(idx) {
+    print("  " + idx.name + ": " + JSON.stringify(idx.key));
+});
+""", collapse_output=False),
+                    ShellCommand(
+                        f"{_INSERT_CMD} --tag one-index",
+                        collapse_output=False,
+                    ),
+                ]
+            ),
+
+            # STEP 4: Create 8 more indexes (9 total)
+            DemoStep(
+                id="add-indexes",
+                title="Create 8 More Indexes (9 Total Secondary Indexes)",
+                description="Index every field written by the workload — a common anti-pattern",
+                markdown="""
+## The Over-Indexing Anti-Pattern
+
+Create indexes on every field the workload writes to. This mirrors a common mistake:
+adding indexes reactively as query patterns emerge, without auditing the write cost.
+
+**Indexes being added:**
+| Index | Field | Why it's tempting |
+|-------|-------|-------------------|
+| `field0_1` | field0 | Filter by primary category |
+| `field1_1` | field1 | Filter by secondary attribute |
+| `field2_1` | field2 | Support legacy queries |
+| `field3_1` | field3 | Support reporting queries |
+| `field4_1` | field4 | Support analytics queries |
+| `field5_1` | field5 | Support dashboard queries |
+| `field6_1` | field6 | Support search queries |
+| `field7_1` | field7 | Support export queries |
+
+Each is justifiable in isolation. Together they create **9x write amplification**:
+every insert must update 9 B-trees instead of 1.
+""",
+                commands=[
+                    MongoshCommand("""
+db.usertable.createIndex({field0: 1});
+db.usertable.createIndex({field1: 1});
+db.usertable.createIndex({field2: 1});
+db.usertable.createIndex({field3: 1});
+db.usertable.createIndex({field4: 1});
+db.usertable.createIndex({field5: 1});
+db.usertable.createIndex({field6: 1});
+db.usertable.createIndex({field7: 1});
+
+print("✓ Created 8 additional indexes");
+print("");
+print("All indexes (" + db.usertable.getIndexes().length + " total):");
+db.usertable.getIndexes().forEach(function(idx) {
+    print("  " + idx.name + ": " + JSON.stringify(idx.key));
+});
+""", collapse_output=False),
+                ]
+            ),
+
+            # STEP 5: Measure write performance with 9 indexes
+            DemoStep(
+                id="over-indexed",
+                title="Write Performance With 9 Indexes",
+                description="Run the identical workload — now every write maintains 9 B-trees",
+                markdown="""
+## Over-Indexed: The Cost Revealed
+
+Run the exact same workload against the collection with 9 secondary indexes.
+
+**What MongoDB does on each insert (9 secondary indexes):**
+1. Write document to collection
+2. Update `_id` B-tree
+3. Update `score` B-tree
+4. Update `field0` B-tree
+5. Update `field1` B-tree
+6. Update `field2` B-tree
+7. Update `field3` B-tree
+8. Update `field4` B-tree
+9. Update `field5` B-tree
+10. Update `field6` B-tree
+11. Update `field7` B-tree
+
+Under 8 concurrent threads, each insert acquires write locks on 9 B-trees.
+Threads frequently collide on the same index pages, serialising what would
+otherwise be parallel writes. Lock wait time compounds beyond simple multiplication.
+
+**Expected:** Significant throughput drop and latency increase vs baseline.
+The p99 latency spike is often more dramatic than the throughput drop.
+""",
+                commands=[
+                    ShellCommand(
+                        f"{_INSERT_CMD} --tag over-indexed",
+                        collapse_output=False,
+                    ),
+                ]
+            ),
+
+            # STEP 6: Compare baseline vs over-indexed
+            DemoStep(
+                id="compare",
+                title="Compare Results: No Indexes vs Over-Indexed",
+                description="Side-by-side comparison showing the full write performance cost",
+                markdown="""
+## Results Comparison
+
+Side-by-side view of write throughput and latency across all three configurations.
+
+**Key Metrics to Watch:**
+
+**Throughput (ops/sec)**
+- No index: maximum throughput (baseline)
+- One index: minimal degradation (~5–15%)
+- Over-indexed: measurable degradation (10–40% locally, 30–70% on Atlas/production)
+
+**Latency (p99)**
+- Over-indexed p99 is typically far worse than throughput suggests
+- Lock contention under concurrent load creates latency spikes
+- p99 degradation > throughput degradation is the overindexing signature
+
+**Why it matters in production:**
+- Write-heavy services (event streams, order processing, IoT) are hit hardest
+- Index overhead compounds: 10k inserts/sec × 9 indexes = 90k B-tree writes/sec
+- Unused indexes pay full write cost with zero read benefit
+- Audit indexes regularly with `$indexStats` — drop indexes with zero accesses
+
+**Remediation:** Use `db.usertable.aggregate([{$indexStats: {}}])` to identify
+unused indexes, then drop them. One index removed = one full write path eliminated.
+""",
+                commands=[
+                    ShellCommand("mdbpl compare --tags no-index,over-indexed"),
+                ]
+            ),
+        ]

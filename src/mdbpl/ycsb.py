@@ -134,11 +134,29 @@ insertproportion=1
         
         if result.returncode != 0:
             raise RuntimeError(f"YCSB load failed with exit code {result.returncode}")
-            
+
     finally:
-        # Clean up temp file
         if os.path.exists(workload_file):
             os.unlink(workload_file)
+
+    # Add sequential numeric score field (0..record_count-1).
+    # score is a first-class part of the dataset: range-scan and group-by
+    # default to it, and it serves as a reliable numeric field for index demos.
+    print()
+    print("Adding score field...")
+    from pymongo import MongoClient, UpdateOne
+    client = MongoClient(mongodb_uri)
+    coll = client[database][collection]
+    batch = []
+    for i, doc in enumerate(coll.find({}, {"_id": 1})):
+        batch.append(UpdateOne({"_id": doc["_id"]}, {"$set": {"score": i}}))
+        if len(batch) >= 1000:
+            coll.bulk_write(batch)
+            batch = []
+    if batch:
+        coll.bulk_write(batch)
+    client.close()
+    print(f"✓ Added score field (0–{record_count - 1})")
 
 
 def run_ycsb_workload(

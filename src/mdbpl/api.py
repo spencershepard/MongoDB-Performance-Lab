@@ -2,16 +2,16 @@
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse
 from pydantic import BaseModel
 from typing import Optional, List
 import asyncio
 import os
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
 from mdbpl.demos import list_demos, get_demo
 from mdbpl.frontend.dash_app import create_dash_app
-from mdbpl.dsl.loader import WorkloadLoader
 from mdbpl.executor import WorkloadExecutor, BenchmarkResult
 from mdbpl.storage import BenchmarkStorage
 
@@ -63,31 +63,56 @@ async def health():
 
 
 # ============================================================================
-# Workload Endpoints
+# Workload Endpoints (Deprecated - Python API is now primary)
 # ============================================================================
 
 @app.get("/api/workloads")
 async def get_workloads():
-    """List all available workloads."""
-    workloads = WorkloadLoader.list_builtin_workloads()
-    return {"workloads": workloads}
+    """List all available built-in workloads."""
+    return {
+        "workloads": [
+            "read-heavy",
+            "balanced", 
+            "write-heavy",
+            "range-scan"
+        ]
+    }
 
 
 @app.get("/api/workloads/{workload_name}")
 async def get_workload_info(workload_name: str):
     """Get details about a specific workload."""
-    try:
-        workload = WorkloadLoader.load_builtin(workload_name)
-        return {
-            "name": workload.name,
-            "description": workload.description,
-            "database": workload.database,
-            "collection": workload.collection,
-            "distribution": workload.distribution.type if workload.distribution else "uniform",
-            "operations": len(workload.operations)
+    workload_info = {
+        "read-heavy": {
+            "name": "read-heavy",
+            "description": "95% reads, 5% updates (YCSB Workload B)",
+            "database": "perflab",
+            "collection": "usertable"
+        },
+        "balanced": {
+            "name": "balanced",
+            "description": "50% reads, 50% updates (YCSB Workload A)",
+            "database": "perflab",
+            "collection": "usertable"
+        },
+        "write-heavy": {
+            "name": "write-heavy",
+            "description": "10% reads, 90% updates (YCSB Workload E)",
+            "database": "perflab",
+            "collection": "usertable"
+        },
+        "range-scan": {
+            "name": "range-scan",
+            "description": "80% range queries, 20% point reads",
+            "database": "perflab",
+            "collection": "usertable"
         }
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+    }
+    
+    if workload_name not in workload_info:
+        raise HTTPException(status_code=404, detail=f"Workload '{workload_name}' not found")
+    
+    return workload_info[workload_name]
 
 
 # ============================================================================
@@ -115,33 +140,37 @@ async def get_benchmark_by_tag(tag: str):
     """Get benchmark results by tag."""
     result = storage.get_run_by_tag(tag)
     if not result:
-        raise HTTPException(status_code=404, detail=f"No benchmark found with tag: {tag}")
+        raise HTTPException(status_code=404, detail="Benchmark not found")
     return result
-
-
-@app.get("/api/benchmarks/compare")
-async def compare_benchmarks(baseline: str, optimized: str):
-    """Compare two benchmark runs by their tags."""
-    comparison = storage.compare_runs(baseline, optimized)
-    if not comparison:
-        raise HTTPException(status_code=404, detail="One or both benchmarks not found")
-    return comparison
 
 
 @app.post("/api/benchmarks/run")
 async def run_benchmark(request: RunBenchmarkRequest):
     """
-    Execute a benchmark workload.
+    Run a benchmark workload.
     
     Args:
-        request: Benchmark parameters including workload, duration, and tag
+        request: Benchmark configuration including workload name, duration, etc.
         
     Returns:
-        Complete benchmark results including metrics and operation breakdown
+        Benchmark results with run_id for later retrieval.
     """
     try:
-        # Load workload
-        workload = WorkloadLoader.load_builtin(request.workload_name)
+        # Load Python benchmark
+        if request.workload_name == "read-heavy":
+            from mdbpl import create_read_heavy_benchmark
+            workload = create_read_heavy_benchmark()
+        elif request.workload_name == "balanced":
+            from mdbpl import create_balanced_benchmark
+            workload = create_balanced_benchmark()
+        elif request.workload_name == "write-heavy":
+            from mdbpl import create_write_heavy_benchmark
+            workload = create_write_heavy_benchmark()
+        elif request.workload_name == "range-scan":
+            from mdbpl import create_range_scan_benchmark
+            workload = create_range_scan_benchmark()
+        else:
+            raise HTTPException(status_code=404, detail=f"Workload '{request.workload_name}' not found")
         
         # Create executor
         executor_instance = WorkloadExecutor(
@@ -179,6 +208,8 @@ async def run_benchmark(request: RunBenchmarkRequest):
         
         return result_dict
         
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
@@ -214,6 +245,129 @@ async def get_demo_info(demo_name: str):
         return demo.get_metadata()
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.get("/api/demos/{demo_name}/docs")
+async def get_demo_docs(demo_name: str):
+    """
+    Get markdown documentation for a specific demo.
+    
+    Args:
+        demo_name: Name of the demo (e.g., 'index-performance')
+        
+    Returns:
+        Dictionary with markdown content and metadata.
+        
+    Note:
+        This is a convenience endpoint. For general doc access, use /api/docs/{path}
+    """
+    try:
+        demo = get_demo(demo_name)
+        metadata = demo.get_metadata()
+        return {
+            "markdown": demo.get_markdown_content(),
+            "has_docs": metadata.get("has_docs", False),
+            "title": metadata.get("title", ""),
+            "description": metadata.get("description", "")
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.get("/api/docs")
+async def list_documentation():
+    """
+    List all available documentation files in the docs/ directory.
+    
+    Returns:
+        Dictionary with categorized documentation files.
+    """
+    # Get project root (up from src/mdbpl/api.py)
+    project_root = Path(__file__).parent.parent.parent
+    docs_dir = project_root / "docs"
+    
+    if not docs_dir.exists():
+        return {"docs": [], "demos": []}
+    
+    # Find all markdown files
+    docs = []
+    demos = []
+    
+    try:
+        # Root level docs
+        for doc_path in docs_dir.glob("*.md"):
+            docs.append({
+                "name": doc_path.stem,
+                "filename": doc_path.name,
+                "path": doc_path.name
+            })
+        
+        # Demo docs
+        demos_dir = docs_dir / "demos"
+        if demos_dir.exists():
+            for doc_path in demos_dir.glob("*.md"):
+                demos.append({
+                    "name": doc_path.stem,
+                    "filename": doc_path.name,
+                    "path": f"demos/{doc_path.name}"
+                })
+        
+        return {
+            "docs": sorted(docs, key=lambda x: x["name"]),
+            "demos": sorted(demos, key=lambda x: x["name"])
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error listing docs: {str(e)}")
+
+
+@app.get("/api/docs/{path:path}")
+async def get_documentation(path: str):
+    """
+    Serve markdown documentation from the docs/ directory.
+    
+    Args:
+        path: Relative path to markdown file (e.g., 'demos/index-performance.md' or 'METRICS.md')
+        
+    Returns:
+        Dictionary with markdown content and metadata.
+        
+    Examples:
+        - GET /api/docs/demos/index-performance.md
+        - GET /api/docs/METRICS.md
+        - GET /api/docs/DSL-SPEC.md
+    """
+    # Get project root (up from src/mdbpl/api.py)
+    project_root = Path(__file__).parent.parent.parent
+    doc_path = project_root / "docs" / path
+    
+    # Security: Prevent directory traversal
+    try:
+        doc_path = doc_path.resolve()
+        docs_dir = (project_root / "docs").resolve()
+        if not str(doc_path).startswith(str(docs_dir)):
+            raise HTTPException(status_code=403, detail="Access forbidden")
+    except Exception:
+        raise HTTPException(status_code=403, detail="Invalid path")
+    
+    # Check if file exists
+    if not doc_path.exists() or not doc_path.is_file():
+        raise HTTPException(status_code=404, detail="Documentation not found")
+    
+    # Only serve markdown files
+    if not doc_path.suffix.lower() in [".md", ".markdown"]:
+        raise HTTPException(status_code=400, detail="Only markdown files are supported")
+    
+    # Read and return content
+    try:
+        content = doc_path.read_text(encoding='utf-8')
+        return {
+            "markdown": content,
+            "path": path,
+            "filename": doc_path.name,
+            "title": doc_path.stem.replace("-", " ").title()
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error reading file: {str(e)}")
 
 
 @app.post("/api/demos/{demo_name}/run")
