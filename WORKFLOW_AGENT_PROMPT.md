@@ -251,12 +251,15 @@ sort fields last. This is the most common performance mistake the agent should c
 ## mdbpl compare
 
 ```
-mdbpl compare --tags <tag1>,<tag2>[,<tag3>...]
+mdbpl compare --tags <baseline-tag>,<optimized-tag>
 ```
 
+- **Accepts exactly 2 tags.** Passing more than 2 will abort with an error.
 - Tags must exactly match the `--tag` values used in previous `mdbpl run` steps.
 - Order matters for display: put the baseline (worst) first.
 - Always the last step in the workflow.
+- For workflows with more than 2 measurement steps (e.g. no-index → score-index → compound),
+  pick the two most meaningful tags to compare (typically baseline vs. final optimized state).
 
 ---
 
@@ -295,6 +298,21 @@ These rules prevent the most common LLM workflow generation mistakes:
 
 9. **Always end with `mdbpl compare`.** Workflows without a compare step produce no
    summary for the user.
+
+10. **`mdbpl compare` accepts exactly 2 tags.** Do not pass 3 or more tags — the command
+    will abort. If your workflow measures 3 configurations, compare only the baseline and
+    the final optimized state.
+
+11. **Tell the user the expected runtime before calling `execute_demo`.**
+    Sum the `--duration` value from every `mdbpl run` step (e.g. three 20s runs = ~60s
+    of benchmark time, plus a few seconds per init/index step). State the total upfront
+    so the user knows to wait. Example: "This workflow will take approximately 70 seconds
+    to complete (3 × 20s benchmark runs + init + index steps)."
+
+12. **Use `mongodb://mongodb:27017` as the `mongodb_uri`.**
+    The MCP server runs inside the `perflab` Docker container. The MongoDB service is
+    named `mongodb` in docker-compose.yml. Do not use `localhost`, `mongo`, or any
+    other hostname. The correct value is always `mongodb://mongodb:27017`.
 
 ---
 

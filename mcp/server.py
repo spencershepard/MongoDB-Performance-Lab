@@ -273,6 +273,10 @@ def get_schema(mongodb_uri: str, collection: str, database: str = "perflab") -> 
     Introspect a MongoDB collection: indexes, document count, storage stats,
     a sample document, and inferred field types.
 
+    mongodb_uri: use "mongodb://mongodb:27017" when running against the lab's
+    built-in MongoDB instance (Docker service name is "mongodb", not "mongo"
+    or "localhost").
+
     Use this to check what indexes already exist before recommending new ones.
     """
     from pymongo import MongoClient
@@ -444,6 +448,9 @@ def explain_query(
     summary: scan type, index used, docs examined vs returned, in-memory sort
     detection, efficiency verdict, and the raw explain output.
 
+    mongodb_uri: use "mongodb://mongodb:27017" for the lab's built-in MongoDB
+    instance (Docker service is "mongodb", not "localhost" or "mongo").
+
     Provide either:
       pipeline    — JSON array string for an aggregation query
       filter      — JSON object string for a find() filter (optionally with sort/projection)
@@ -550,6 +557,13 @@ def execute_demo(demo_code: str, mongodb_uri: str, timeout_seconds: int = 300) -
     demo_code must be a complete Python module containing exactly one class
     that subclasses mdbpl.demos.base.Demo and implements steps().
 
+    mongodb_uri: always use "mongodb://mongodb:27017". The MCP server runs inside
+    the perflab Docker container; the MongoDB service is named "mongodb" in
+    docker-compose.yml. Do not use localhost, mongo, or any other hostname.
+
+    Before calling this tool, tell the user the expected runtime: sum the --duration
+    value from every `mdbpl run` step and add a few seconds per init/index step.
+
     Returns DemoResult as JSON. Each step's stdout is in steps[].outputs[].stdout.
     The agent should read per-step stdout to extract throughput and latency numbers.
 
@@ -586,6 +600,11 @@ def execute_demo(demo_code: str, mongodb_uri: str, timeout_seconds: int = 300) -
                 "error": "No Demo subclass found. The module must define a class that subclasses mdbpl.demos.base.Demo.",
                 "error_type": "structure",
             })
+
+        # Persist to user demos directory so the UI can discover and re-run it
+        user_demos_dir = Path("/data/user_demos")
+        user_demos_dir.mkdir(parents=True, exist_ok=True)
+        (user_demos_dir / f"{demo_classes[0].id}.py").write_text(demo_code, encoding="utf-8")
 
         demo_instance = demo_classes[0]()
         result = demo_instance.run()
