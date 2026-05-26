@@ -1,564 +1,255 @@
-
 # MongoDB Performance Lab
 
-An interactive MongoDB performance experimentation platform designed for learning, optimization, and CI/CD integration.
+[![License: Unlicense](https://img.shields.io/badge/license-Unlicense-blue.svg)](https://unlicense.org)
+[![Requires Docker](https://img.shields.io/badge/requires-Docker-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
+[![MCP Compatible](https://img.shields.io/badge/MCP-compatible-10b981)](https://modelcontextprotocol.io)
 
 ![MongoDB Performance Lab](logo.png)
 
-## Overview
+MongoDB queries get slow. The fix is usually an index, but knowing *which* one, and proving the improvement before you ship, is where teams get stuck.
 
-**MongoDB Performance Lab** bridges the gap between MongoDB tutorials and production optimization. Unlike traditional benchmarking tools (YCSB, NoSQLBench), this platform is designed for iterative experimentation with a focus on **learning** and **reproducibility**.
-
-### What Makes This Different?
-
-**For Developers Learning MongoDB:**
-- 🎓 Out-of-the-box datasets and workloads (no complex setup)
-- 📊 Visual before/after comparisons to understand optimization impact
-- 🔍 Integrated explain plan analysis and metrics
-- 🎯 Guided workflows for common performance scenarios
-
-**For DBAs Optimizing Production:**
-- 📸 Snapshot mode: Import production data and replay workloads
-- 🔄 Reproducible benchmarks via Python API
-- 🚀 CI/CD integration for performance regression testing
-- 📈 Historical trend analysis across schema iterations
-
-**vs. Traditional Tools:**
-- **vs. YCSB**: Easier to use, MongoDB-focused, visual comparison, Python API
-- **vs. MongoDB Atlas Performance Advisor**: Works locally, synthetic workloads, proactive testing
-- **vs. Custom Scripts**: Standardized metrics, reproducible, shareable benchmarks
-
-### Core Features
-
-- ⚡ **YCSB-powered data generation** with realistic distributions
-- � **Python Benchmark API** for defining workloads with simple decorators
-- 🎯 **Benchmark runner** with detailed performance metrics (p50/p95/p99, docs scanned, index usage)
-- 🔄 **Compare mode** to visualize optimization impact
-- 🌐 **Web UI** with interactive charts and one-click demos (Plotly Dash)
-- 🛠️ **CLI & REST API** for both interactive experimentation and automation
-- 🐳 **Docker-based** for consistent, reproducible environments
+This is a local lab for that problem. Load realistic data, run controlled benchmarks, measure precisely what changed. Connect it to your coding agent via MCP and it becomes a diagnostic tool: explain your real queries, benchmark a fix against your actual schema, get a verified `createIndex` call with proof attached. Not a managed service. A lab you control. 🧪
 
 ---
 
-## Getting Started
-
-### Prerequisites
-
-- Docker and Docker Compose
-- Git
-
-### Quick Start
-
-1. **Clone and start services**
+## Quick Start
 
 ```bash
-git clone https://github.com/your-org/mongodb-performance-lab.git
+git clone https://github.com/spencershepard/mongodb-performance-lab.git
 cd mongodb-performance-lab
-docker-compose up -d
+docker compose up -d
+docker compose exec perflab mdbpl test
+open http://localhost:8888     # UI — use 'start' on Windows
 ```
-
-This starts:
-- MongoDB (port 27017)
-- Performance Lab API & Web UI (port 8888)
-
-### Web UI (Interactive Dashboard)
-
-Open your browser to explore performance demos visually:
-
-**http://localhost:8888/ui/**
-
-
-The Web UI provides:
-- 🎯 **Demo selector** - Choose from available performance demonstrations
-- ▶️ **One-click execution** - Run demos with a button click
-- 📈 **Detailed metrics** - Before/after comparison tables with improvement percentages
-- ⏱️ **Execution timeline** - Step-by-step progress with timing information
-
-The Web UI is built with Plotly Dash for rapid development, but the REST API (`/api/*`) is designed to support any frontend framework. The same API powers both the CLI and web interface, making it easy to switch to React/Next.js in the future.
-
-
-```
-
-**Init options:**
-- `--scale`: Dataset size (10, 1k, 100k, 1M, 10M, etc.)
-- `--distribution`: Key distribution (zipfian, uniform, latest)
-- `--fields`: Number of fields per document (default: 10)
-- `--field-length`: Length of each field value (default: 100)
-- `--drop`: Drop existing collection before loading (recommended)
-
-Initialize a sample dataset:
-
-```bash
-docker-compose exec perflab mdbpl init --scale 100k --distribution zipfian --drop
-```
-
-**Experiment and optimize**
-
-Use MongoDB tools to experiment with performance optimizations:
-
-**MongoDB Compass** (Recommended - Visual GUI)
-- Download: [MongoDB Compass](https://www.mongodb.com/products/compass)
-- Connect to: `mongodb://localhost:27017`
-- Navigate to: `perflab` database
-
-**mongosh** (MongoDB Shell - Advanced users)
-```bash
-docker-compose exec mongodb mongosh
-use perflab
-```
-
-**Optimization Techniques to Try:**
-
-**Indexes** - Most common optimization
-```bash
-# Use mongosh to manage indexes
-docker-compose exec mongodb mongosh perflab --eval "db.usertable.createIndex({field0: 1})"
-docker-compose exec mongodb mongosh perflab --eval "db.usertable.createIndex({field0: 1, field1: 1})"  # compound
-docker-compose exec mongodb mongosh perflab --eval "db.usertable.getIndexes()"
-docker-compose exec mongodb mongosh perflab --eval "db.usertable.dropIndex('field0_1')"
-
-# Or use interactive mongosh shell
-docker-compose exec mongodb mongosh perflab
-# Then inside mongosh:
-# > db.usertable.createIndex({field0: 1})
-# > db.usertable.getIndexes()
-# > db.usertable.dropIndex('field0_1')
-```
-
-**Schema Design** - Restructure your data
-```javascript
-// Add embedded documents
-db.usertable.updateMany({}, { 
-  $set: { metadata: { field0: "$field0" } } 
-})
-
-// Denormalize data
-db.usertable.updateMany({}, {
-  $set: { computed_field: "value" }
-})
-```
-
-**Query Optimization** - Modify your Python workload
-```python
-# Use projection to limit fields returned
-collection.find({"field0": value}, {"field0": 1, "field1": 1})
-
-# Use covered queries (query + projection only use indexed fields)
-# Adjust sort orders with .sort()
-# Add filters to reduce result sets
-```
-
-**Data Modeling** - Change collection structure
-```javascript
-// Try bucketing patterns
-// Experiment with array fields
-// Test different data types
-```
-
-**Aggregation Pipelines** - Optimize complex queries
-```javascript
-// Add indexes to support $match stages
-// Reorder pipeline stages
-// Use $project early to reduce document size
-```
-
-### Learning Workflow
-
-The recommended workflow for performance experimentation:
-
-1. **Load baseline data** → `mdbpl init --scale 10k --drop`
-2. **Run baseline benchmark** → `mdbpl run --workload range-scan --tag no-index`
-3. **Analyze results** → Review metrics (156 ops/sec, 3.83ms avg latency)
-4. **Make a change** → `docker-compose exec mongodb mongosh perflab --eval "db.usertable.createIndex({field0: 1})"`
-5. **Re-benchmark** → `mdbpl run --workload range-scan --tag with-index`
-6. **Compare results** → `mdbpl compare --tags no-index,with-index`
-   - **Result**: +861% throughput, -92% latency! 🎉
-7. **Iterate** → Try compound indexes, different workloads, schema changes
-
-**Real Example Output:**
-```
-Metric                    No Index        With Index      Change          Status
-================================================================================
-Throughput (ops/sec)      156.25          1501.98         +861.26%        ✓ (improved)
-Latency p50 (ms)          3.42            0.28            -91.84%         ✓ (improved)
-Latency p95 (ms)          5.20            0.43            -91.71%         ✓ (improved)
-```
-
-**Example Experiment Ideas:**
-- Does a single-field index improve query X?
-- How does a compound index compare to two single-field indexes?
-- Is denormalization faster than using `$lookup`?
-- What's the impact of adding a text index?
-- How does changing field order in a compound index affect performance?
-
-### Next Steps
-
-- Explore [built-in workloads](#workloads-mvp)
-- Create [custom workloads](#python-workload-api)
-- Set up [CI/CD integration](#cli-mode-cicd-integration)
-- Read [MongoDB Performance Best Practices](https://www.mongodb.com/docs/manual/administration/analyzing-mongodb-performance/)
-- Learn about [Query Optimization](https://www.mongodb.com/docs/manual/core/query-optimization/)
-- Study [Indexing Strategies](https://www.mongodb.com/docs/manual/indexes/)
 
 ---
 
-## Goals
+## Connect Your Agent
 
-### MVP
-- Run reproducible MongoDB benchmarks
-- Compare query performance across indexes
-- Visualize latency and execution behavior
-- Teach database performance concepts
-- Single-node MongoDB only
+Any MCP-compatible agent can connect to the running lab and work against your actual data.
 
-### Future
-- Snapshot ingestion ("production snapshot mode")
-- Schema introspection + workload generation
-- LLM-generated workloads
-- Multi-database benchmarking
-- Replica set and sharded cluster support
-
----
-
-## Core Concept
-
-Three layers:
-
-1. Dataset Layer (YCSB data generation)
-2. Workload Layer (Python API with decorators)
-3. Execution Layer (metrics collection and analysis)
-
-All workloads are defined via Python functions using the Benchmark API.
-
----
-
-## Dataset (MVP)
-
-Uses **YCSB (Yahoo! Cloud Serving Benchmark)** for data generation.
-
-YCSB-style documents:
+Add to your MCP config (`~/.claude/settings.json` for Claude Code, `.cursor/mcp.json` for Cursor):
 
 ```json
 {
-  "_id": "user0000000001",
-  "field0": "random_string_100_chars...",
-  "field1": "random_string_100_chars...",
-  "field2": "random_string_100_chars...",
-  ...
-  "field9": "random_string_100_chars..."
+  "mcpServers": {
+    "mongodb-perflab": {
+      "command": "docker",
+      "args": [
+        "compose", "-f", "/path/to/mongodb-performance-lab/docker-compose.yml",
+        "exec", "-i", "perflab",
+        "python", "mcp/server.py"
+      ]
+    }
+  }
 }
 ```
 
-**Data Generation Strategy:**
-- YCSB binary handles dataset creation (battle-tested, industry standard)
-- Supports Zipfian, uniform, and latest distributions
-- Configurable record count and field sizes
-- `mdbpl init` wraps YCSB for easy setup
-
-**Workload Execution:**
-- Custom Python-based workload runner (not YCSB's execution engine)
-- Full control over metrics, explain plans, and query patterns
-- Extensible beyond YCSB's standard workloads
+> Set `MONGODB_URI` to point at a local dev database and the agent analyzes your real application data, not synthetic benchmarks.
 
 ---
 
-## Workloads (MVP)
+## From Slow Query to Verified Fix
 
-**Built-in Workloads:**
-- `read-heavy`: 95% reads, 5% updates (YCSB Workload B)
-- `balanced`: 50% reads, 50% updates (YCSB Workload A)
-- `write-heavy`: 10% reads, 90% updates (YCSB Workload E)
-- `range-scan`: Range queries with sorting on indexed fields
+You ask: *"Why is my orders API slow?"*
 
-All workloads are implemented using the Python Benchmark API for flexibility and ease of customization.
-
----
-
-## Python Workload API
-
-Workloads are defined using Python decorators for maximum flexibility:
-
-```python
-from mdbpl import Benchmark, zipfian
-
-# Create a benchmark
-benchmark = Benchmark(
-    name="read-heavy",
-    database="perflab",
-    collection="usertable",
-    description="95% reads, 5% updates with zipfian distribution"
-)
-
-# Setup distribution (80/20 access pattern)
-dist = zipfian(record_count=10000)
-
-# Define operations with weights
-@benchmark.operation(weight=95, name="point_read")
-def point_read(collection):
-    doc_id = f"user{dist.next():010d}"
-    return collection.find_one(
-        {"_id": doc_id},
-        {"field0": 1, "field1": 1, "field2": 1}
-    )
-
-@benchmark.operation(weight=5, name="update_field")
-def update_field(collection):
-    doc_id = f"user{dist.next():010d}"
-    return collection.update_one(
-        {"_id": doc_id},
-        {"$set": {"field0": "x" * 100}}
-    )
-```
-
-**Key Features:**
-- **Decorator-based**: `@benchmark.operation(weight=N, name="...")` 
-- **Weighted operations**: Weights don't need to sum to 100
-- **Full pymongo API**: Use any MongoDB query, update, aggregation
-- **Distribution generators**: `zipfian()`, `uniform()`, `latest()`
-- **Built-in workloads**: `create_read_heavy_benchmark()`, `create_balanced_benchmark()`, etc.
-
-**Example: Custom E-commerce Workload**
-
-```python
-from mdbpl import Benchmark, uniform
-
-benchmark = Benchmark(
-    name="ecommerce-orders",
-    database="ecommerce",
-    collection="orders"
-)
-
-dist = uniform(100000)
-
-@benchmark.operation(weight=70, name="lookup_by_id")
-def lookup_order(collection):
-    order_id = dist.next()
-    return collection.find_one({"order_id": order_id})
-
-@benchmark.operation(weight=20, name="find_by_status")
-def find_pending(collection):
-    return list(collection.find({"status": "pending"}).limit(10))
-
-@benchmark.operation(weight=10, name="aggregate_totals")
-def daily_totals(collection):
-    return list(collection.aggregate([
-        {"$match": {"date": "2024-01-15"}},
-        {"$group": {"_id": "$status", "total": {"$sum": "$amount"}}}
-    ]))
-```
-
-See [examples/custom_benchmark.py](examples/custom_benchmark.py) for a complete working example.
-
----
-
-## Execution Flow
-
-Python Workload → Benchmark Runner → MongoDB → Metrics → Storage/UI
-
----
-
-## Performance Metrics
-
-MongoDB Performance Lab collects comprehensive metrics to help you understand query performance and identify optimization opportunities.
-
-### Core Metrics
-
-**Throughput & Latency**
-- **Operations per second** - Total query throughput
-- **Latency percentiles** (p50/p95/p99) - Response time distribution
-  - p50: 50% of operations complete faster than this
-  - p95: 95% of operations complete faster than this (key SLA metric)
-  - p99: 99% of operations complete faster than this (outlier detection)
-
-**Query Efficiency**
-- **Docs Examined** - Documents MongoDB scanned to answer queries
-- **Docs Returned** - Documents actually returned to the application
-- **Efficiency Score** - `(Docs Returned / Docs Examined) × 100%`
-  - 🟢 >80%: Excellent - index is very selective
-  - 🟡 50-80%: Good - index helps but could be improved
-  - 🔴 <50%: Poor - needs better indexing or query optimization
-
-**Index Usage**
-- **Index Scans** - Queries that used an index (efficient)
-- **Collection Scans** - Queries that scanned entire collection (inefficient for large datasets)
-- **Index Names** - Which specific indexes were used
-
-### Understanding Efficiency
-
-The efficiency score is the most important metric for optimization:
+The agent finds the query and explains it:
 
 ```
-Without Index:
-  Docs Examined: 10,000 (full collection scan)
-  Docs Returned: 20
-  Efficiency: 0.2% 🔴
-
-With Index:
-  Docs Examined: 20
-  Docs Returned: 20
-  Efficiency: 100% 🟢
+scan_type:           COLLSCAN
+index_used:          none
+total_docs_examined: 84,312
+docs_returned:       47
+verdict:             No index on 'customerId'. Add {customerId: 1} to orders.
 ```
 
-A low efficiency score means MongoDB is scanning far more data than needed - adding the right index can provide **10-100x** performance improvements.
+Generates a benchmark for your schema, runs it:
 
-### Sampling Strategy
+```
+Throughput:       12.4 → 1,847 ops/sec  (+14,800%)
+Latency p95:      412ms → 2.8ms
+$lookup strategy: NestedLoopJoin → IndexedLoopJoin
+```
 
-To minimize benchmark overhead while maintaining accuracy:
-- **100% Sampling**: Latency, docs returned (every operation measured)
-- **10% Sampling**: Explain analysis (docs examined, index usage)
-- **Extrapolation**: Sampled explain metrics scaled to represent full workload
+Hands you the `createIndex` call and explains why it works.
 
-This approach provides accurate metrics with minimal performance impact.
+**Tools available to the agent:**
 
-### Detailed Metrics Guide
-
-For in-depth explanations of metrics collection, troubleshooting, and interpretation, see [Performance Metrics Guide](docs/METRICS.md).
-
----
-
-## Architecture
-
-Frontend → API → Benchmark Engine → Python Workloads → MongoDB
-
-### Tech Stack
-
-**Backend**
-- Python 3.11+
-- FastAPI for REST API
-- pymongo for MongoDB operations
-- SQLite for benchmark result storage
-
-**Frontend**
-- Plotly Dash (current - for rapid MVP development)
-- Visualization: Plotly.js charts (interactive)
-- React/Next.js migration path (API is framework-agnostic)
-
-**Deployment**
-- CLI mode for CI/CD integration and terminal workflows
-- Web UI (http://localhost:8888/ui) for interactive experimentation
-- REST API (/api/*) for programmatic access and frontend integration
-- Docker Compose for consistent, reproducible environments
-
-### Target Audience
-
-1. **Learning Mode** (out-of-the-box)
-   - Developers learning MongoDB performance concepts
-   - Pre-configured workloads and datasets
-   - Educational visualizations and explanations
-
-2. **Optimization Mode** (snapshot + custom)
-   - DBAs optimizing production schemas
-   - Custom workload definitions
-   - Production data snapshot ingestion
-   - Index recommendation insights
+| Tool | What it does |
+|------|-------------|
+| `get_analysis_guide` | Find MongoDB queries in Node.js, Python, PHP, Java, Go |
+| `get_best_practices` | Indexing and query optimization reference |
+| `get_schema` | Introspect a live collection: indexes, doc count, field types, sample doc |
+| `explain_query` | Run `explain()` on any query; returns scan type, index used, docs examined, verdict |
+| `get_demo_examples` | Demo source the agent uses to adapt benchmarks to your schema |
+| `execute_demo` | Execute a built-in or agent-generated demo, step by step |
 
 ---
 
-## Execution Modes
+## The UI
 
-### CLI Mode (CI/CD Integration)
+Open `http://localhost:8888` after `docker compose up -d`.
 
-Run benchmarks from command line or CI/CD pipelines:
+Every workflow — built-in or agent-generated — appears as an interactive sequence of steps. Before each step runs you can see exactly what will execute: the shell command, the mongosh script, or the pipeline. Step through manually to inspect each result, or run the whole sequence automatically. Benchmark results are browsable and selectable for side-by-side comparison.
+
+**Demos are reusable artifacts.** Each is a plain Python class you can copy into a script or CI pipeline to make the benchmark repeatable on every deploy:
 
 ```bash
-# Run a built-in workload
-mdbpl run --workload read-heavy --duration 30s
-
-# Run a custom Python workload
-mdbpl run --workload custom_benchmark.py --duration 30s
-
-# Compare against baseline
-mdbpl run --workload read-heavy --tag optimized --duration 30s
-mdbpl compare --tags baseline,optimized
-
-# Generate report
-mdbpl report --last
+docker compose exec perflab python /workloads/my_demo.py
+docker compose exec perflab mdbpl compare --tags before,after
 ```
 
-**Use Cases:**
-- Regression testing (detect query performance degradation)
-- Pre-merge validation (fail PR if p95 latency exceeds threshold)
-- Continuous performance monitoring
-- Automated index impact analysis
+---
 
-**Exit Codes:**
-- 0: Benchmark passed
-- 1: Performance regression detected
-- 2: Benchmark execution failed
+## Six Demos, Six Pitfalls
 
-### API Mode (Dashboard)
+Each demo loads data, measures a baseline, applies an optimization, measures again, and produces a side-by-side comparison. The numbers aren't estimates — they're what each demo produces every time it runs.
 
-The API server and Web UI start automatically with docker-compose:
+**Missing index** (`index-performance`)  
+A range query with no index scans every document, every time. Add a single-field index: COLLSCAN becomes IXSCAN. Improvement: **50–100x**.
+
+**Overindexing** (`overindexing`)  
+Every index is maintained on every write. This demo adds indexes one at a time and measures the cost of each one. By the fourth index, writes are **30–70% slower**.
+
+**Compound index design** (`compound-index`)  
+Two single-field indexes can't both be used on a query that filters on both fields. A single compound index in ESR order can. Improvement: **5–15x**.
+
+**Aggregation pipeline** (`aggregation-pipeline`)  
+A `$match → $sort → $group` pipeline without the right index blocks on an in-memory sort every execution. The right compound index eliminates it. Improvement: **10–30x**.
+
+**`$lookup` join strategy** (`lookup`)  
+Without an index on the foreign field, `$lookup` does a full collection scan per input document — NestedLoopJoin. With one, it switches to IndexedLoopJoin. Improvement: **100–1000x**.
+
+**Covering index** (`covering-index`)  
+When the index contains every field the query needs, MongoDB never reads the document — `totalDocsExamined` drops to zero. Improvement: **25–30% in-memory**; **2–10x** with large documents or a cold cache.
 
 ```bash
-docker-compose up -d
-```
-
-Access the dashboard at **http://localhost:8888/dashboard** or **http://localhost:8888/ui/**
-
-**REST API Endpoints:**
-
-- `GET /api/demos` - List all available demos
-- `GET /api/demos/{name}` - Get demo metadata
-- `POST /api/demos/{name}/run` - Execute a demo (returns structured JSON results)
-
-**Features:**
-- Interactive demo selector with one-click execution
-- Real-time benchmark visualization with Plotly charts
-- Before/after comparison tables with improvement percentages
-- Step-by-step execution timeline
-- Same API powers both Web UI and CLI
-
-**Architecture Note:**
-The Web UI is currently built with Plotly Dash for rapid prototyping. The REST API (`/api/*`) is framework-agnostic and designed to support any frontend. When migrating to React/Next.js, simply replace the `/ui` endpoint while keeping the API unchanged.
-
-### Configuration
-
-Both modes share common config:
-
-```yaml
-# perf-lab.yaml
-mongodb:
-  uri: mongodb://localhost:27017
-  database: perflab
-  
-benchmarks:
-  warmup_operations: 1000
-  measurement_operations: 10000
-  threads: 1
-  
-thresholds:
-  p95_latency_ms: 50
-  docs_scanned_ratio: 2.0  # scanned/returned ratio
+docker compose exec perflab mdbpl demo run lookup
 ```
 
 ---
 
-## Snapshot Mode (Future)
+## Data That Looks Like Your Data
 
-- Import MongoDB dump
-- Infer schema
-- Generate workloads
-- Run isolated benchmarks
+The generator is Python-native — no Java, no YCSB. It produces documents with domain-specific field names so `explain()` output and benchmark results use terminology that matches your application.
+
+| Schema | Fields |
+|--------|--------|
+| `ecommerce` | `customerId`, `amount`, `status`, `region`, `createdAt`, `score` |
+| `iot` | `deviceId`, `sensorType`, `value`, `unit`, `timestamp`, `score` |
+| `events` | `userId`, `eventType`, `sessionId`, `page`, `timestamp`, `score` |
+| `videogame` | `playerId`, `rank`, `region`, `wins`, `kills`, `kdr`, `score` |
+| `customers` | `customerId` (sequential), `name`, `email`, `region`, `tier` |
+| `orders` | `customerId` (ref → customers), `amount`, `status`, `productId`, `createdAt` |
+
+The `customers` and `orders` presets are linked: orders sample real `customerId` values from the customers collection at load time, so every `$lookup` join matches a real document.
+
+Custom schemas load from JSON:
+
+```json
+{
+  "name": "products",
+  "fields": [
+    {"name": "sku", "type": "formatted_sequential", "format_string": "SKU-{:06d}"},
+    {"name": "category", "type": "choice", "choices": ["electronics", "books", "clothing"]},
+    {"name": "price", "type": "float", "min_val": 1.0, "max_val": 999.0},
+    {"name": "inStock", "type": "bool"}
+  ]
+}
+```
+
+```bash
+mdbpl init --scale 100k --schema path/to/products.json --collection products
+```
 
 ---
 
-## Key Idea
+## CLI Reference
 
-All workloads are defined using Python functions, giving you:
-- **Full flexibility**: Use any pymongo operation
-- **Reproducibility**: Version control your benchmarks
-- **Extensibility**: Easy to add custom logic
-- **Type safety**: IDE autocomplete and type checking
-- **Familiarity**: Standard Python, no new syntax to learn
+All commands run inside the container via `docker compose exec perflab mdbpl <command>`.
+
+```
+Commands:
+  init     Load test data into MongoDB
+  run      Run a benchmark workload
+  compare  Compare two tagged runs side-by-side
+  report   View stored benchmark results
+  demo     List and run guided demos
+  test     Verify MongoDB connection
+```
+
+```
+mdbpl init
+  --scale TEXT        Record count: 10k, 50k, 100k, 1m  [default: 10k]
+  --schema TEXT       Preset name or path to schema JSON  [default: default]
+  --collection TEXT   Target collection  [default: usertable]
+  --database TEXT     Target database  [default: perflab]
+  --no-drop           Append to existing collection instead of replacing it
+```
+
+```
+mdbpl run
+  --workload TEXT     Built-in name or path to a .py Benchmark file  [required]
+  --tag TEXT          Label for this run — used in mdbpl compare  [required]
+  --duration TEXT     How long to run  [default: 30s]
+  --threads INTEGER   Parallel workers  [default: 1]
+  --collection TEXT   Target collection  [default: usertable]
+  --pipeline TEXT     Aggregation pipeline JSON (raw workload only)
+
+  Workloads: point-read  range-scan  update  insert  mixed  top-n  group-by  raw
+```
+
+```
+mdbpl compare
+  --tags TEXT         Two comma-separated tags: before,after  [required]
+  Prints: throughput, latency p50/p95/p99, docs examined/returned, scan counts, % change
+```
+
+```
+mdbpl report
+  --last              Most recent run
+  --tag TEXT          Run by tag
+  --list              All stored runs
+```
+
+The `raw` workload accepts any aggregation pipeline with `{{field:distribution}}` substitution:
+
+```bash
+mdbpl run --workload raw \
+  --pipeline '[{"$match": {"status": "{{status:uniform}}"}}, {"$limit": 100}]' \
+  --tag baseline
+# Distributions: uniform  zipfian  sequential  literal
+```
+
+---
+
+## Custom Workloads
+
+Drop a `.py` file in `./workloads/` to benchmark your own query patterns:
+
+```python
+# workloads/my_workload.py
+from mdbpl import Benchmark
+
+benchmark = Benchmark(name="my-workload", database="perflab", collection="usertable")
+
+@benchmark.operation(weight=80, name="read")
+def read(collection):
+    return collection.find_one({"status": "active"})
+
+@benchmark.operation(weight=20, name="write")
+def write(collection):
+    return collection.update_one({"status": "active"}, {"$inc": {"score": 1}})
+```
+
+```bash
+mdbpl run --workload /workloads/my_workload.py --tag custom
+```
 
 ---
 
 ## License
 
-This project is released into the **public domain** under the [Unlicense](https://unlicense.org).
-
-You are free to use, modify, distribute, and do anything with this software without any restrictions. See the [LICENSE](LICENSE) file for details.
+Released into the public domain under the [Unlicense](https://unlicense.org). See [LICENSE](LICENSE).
 
 **Created by:** [Spencer Shepard](https://github.com/spencershepard)
-

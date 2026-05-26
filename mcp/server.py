@@ -61,6 +61,15 @@ Search for:
 
 Libraries: `pymongo`, `motor`
 
+### PHP
+Search for:
+  $collection->find(...)             $collection->findOne(...)
+  $collection->aggregate(...)        $collection->updateOne/Many(...)
+  $db->selectCollection(...)
+
+Libraries: `mongodb/mongodb`, `doctrine/mongodb-odm` (Doctrine ODM)
+Doctrine ODM: look for `$dm->createQueryBuilder(...)` and `->field(...)->equals(...)`
+
 ## Step 2 — Extract the query shape
 
 For each query record:
