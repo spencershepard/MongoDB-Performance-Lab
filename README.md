@@ -45,7 +45,10 @@ Add to your MCP config (`~/.claude/settings.json` for Claude Code, `.cursor/mcp.
 }
 ```
 
-> Set `MONGODB_URI` to point at a local dev database and the agent analyzes your real application data, not synthetic benchmarks.
+**Two ways to work with your data:**
+
+- **Point at a real database** — set `MONGODB_URI` to a local dev instance and the agent works against your actual data and indexes.
+- **No database needed** — the agent reads your queries, generates a schema from the fields they use, and loads realistic test data. The queries you're optimizing are all the context it needs.
 
 ---
 
@@ -91,6 +94,8 @@ Hands you the `createIndex` call and explains why it works.
 Open `http://localhost:8888` after `docker compose up -d`.
 
 Every workflow — built-in or agent-generated — appears as an interactive sequence of steps. Before each step runs you can see exactly what will execute: the shell command, the mongosh script, or the pipeline. Step through manually to inspect each result, or run the whole sequence automatically. Benchmark results are browsable and selectable for side-by-side comparison.
+
+![MongoDB Performance Lab UI](docs/screenshot.png)
 
 **Demos are reusable artifacts.** Each is a plain Python class you can copy into a script or CI pipeline to make the benchmark repeatable on every deploy:
 
