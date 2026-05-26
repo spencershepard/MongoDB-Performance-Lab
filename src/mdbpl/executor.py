@@ -324,8 +324,10 @@ class WorkloadExecutor:
                             docs_examined = stats.get('totalDocsExamined', 0)
                             keys_examined = stats.get('totalKeysExamined', 0)
                             docs_returned = wrapped_collection.last_result_count
-                            if docs_examined == 0 and keys_examined > 0:
-                                docs_examined = keys_examined
+                            # Note: docs_examined = 0 is valid for covering indexes!
+                            # Only use keys_examined fallback if BOTH are 0 (edge case)
+                            if docs_examined == 0 and keys_examined == 0:
+                                docs_examined = docs_returned
                             index_used = find_index_scan(stats.get('executionStages', {}))
                         # Check $lookup stages for join strategy. Strategy info is at
                         # the stage level (indexesUsed / collectionScans), not inside
@@ -361,8 +363,10 @@ class WorkloadExecutor:
                             docs_examined = stats.get('totalDocsExamined', 0)
                             keys_examined = stats.get('totalKeysExamined', 0)
                             docs_returned = wrapped_collection.last_result_count
-                            if docs_examined == 0 and keys_examined > 0:
-                                docs_examined = keys_examined
+                            # Note: docs_examined = 0 is valid for covering indexes!
+                            # Only use docs_returned fallback if BOTH are 0 (edge case)
+                            if docs_examined == 0 and keys_examined == 0:
+                                docs_examined = docs_returned
                             index_used = find_index_scan(stats.get('executionStages', {}))
 
                 except Exception:
