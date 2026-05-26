@@ -1,7 +1,6 @@
 """CLI interface for MongoDB Performance Lab."""
 
 import click
-import subprocess
 import os
 from pymongo import MongoClient
 
@@ -18,20 +17,14 @@ def cli():
 # ---------------------------------------------------------------------------
 
 @cli.command()
-@click.option("--dataset", default="ycsb", help="Dataset type to initialize")
 @click.option("--scale", default="10k", show_default=True, help="Dataset scale (e.g., 10k, 100k, 1M)")
+@click.option("--schema", default="default", show_default=True,
+              help="Schema preset (default, ecommerce, iot, events) or path to JSON schema file")
 @click.option("--collection", default="usertable", show_default=True, help="Target collection name")
 @click.option("--database", default="perflab", show_default=True, help="Target database name")
-@click.option("--distribution", default="zipfian", show_default=True, help="Key distribution: zipfian | uniform | latest")
-@click.option("--fields", default=10, show_default=True, help="Number of fields per document")
-@click.option("--field-length", default=100, show_default=True, help="Length of each field value")
 @click.option("--no-drop", is_flag=True, help="Keep existing collection (default: drop and recreate)")
-def init(dataset, scale, collection, database, distribution, fields, field_length, no_drop):
-    """Initialize dataset using YCSB, then add a numeric score field."""
-    if dataset != "ycsb":
-        click.echo(f"Error: Only 'ycsb' dataset is currently supported", err=True)
-        raise click.Abort()
-
+def init(scale, schema, collection, database, no_drop):
+    """Load test data into MongoDB."""
     scale_upper = scale.upper()
     if scale_upper.endswith("K"):
         record_count = int(float(scale_upper[:-1]) * 1000)
@@ -44,27 +37,28 @@ def init(dataset, scale, collection, database, distribution, fields, field_lengt
             click.echo(f"Error: Invalid scale '{scale}'. Use format like '10k', '1M', or a raw number.", err=True)
             raise click.Abort()
 
+    from mdbpl.generator import load_generated_data, resolve_schema
+    try:
+        schema_spec = resolve_schema(schema)
+    except ValueError as e:
+        click.echo(f"✗ {e}", err=True)
+        raise click.Abort()
+
     drop = not no_drop
 
-    click.echo("Initializing YCSB dataset:")
-    click.echo(f"  Target:       {database}.{collection}")
-    click.echo(f"  Records:      {record_count:,}")
-    click.echo(f"  Distribution: {distribution}")
-    click.echo(f"  Fields:       {fields}")
-    click.echo(f"  Field length: {field_length}")
+    click.echo("Initializing dataset:")
+    click.echo(f"  Target:        {database}.{collection}")
+    click.echo(f"  Schema:        {schema_spec.name}")
+    click.echo(f"  Records:       {record_count:,}")
     click.echo(f"  Drop existing: {'no' if no_drop else 'yes'}")
     click.echo()
 
-    from mdbpl.ycsb import load_ycsb_data
-
     try:
         mongodb_uri = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
-        load_ycsb_data(
+        load_generated_data(
             mongodb_uri=mongodb_uri,
             record_count=record_count,
-            distribution=distribution,
-            field_count=fields,
-            field_length=field_length,
+            schema=schema_spec,
             database=database,
             collection=collection,
             drop_existing=drop,
@@ -135,8 +129,7 @@ def _print_results(result, tag: str):
 @cli.command()
 @click.option("--workload", required=True,
               help="Workload name or path to a .py file. "
-                   "Built-in: insert, update, point-read, range-scan, mixed, "
-                   "top-n, group-by, read-heavy, balanced, write-heavy")
+                   "Built-in: insert, update, point-read, range-scan, mixed, top-n, group-by, raw")
 # Targeting
 @click.option("--collection", default="usertable", show_default=True, help="Collection to benchmark")
 @click.option("--database", default="perflab", show_default=True, help="Database to benchmark")
@@ -182,10 +175,15 @@ def _print_results(result, tag: str):
               help="Accumulator (group-by): count | sum | avg | min | max")
 @click.option("--value-field", default=None,
               help="Field to accumulate for sum/avg/min/max (group-by)")
+# raw
+@click.option("--pipeline", default=None,
+              help="JSON aggregation pipeline string (raw workload). "
+                   "Use {{field:dist}} template variables for per-operation sampling. "
+                   "Distributions: uniform (default), zipfian, sequential, literal:<value>.")
 def run(workload, collection, database, threads, duration, tag, distribution,
         fields, batch_size, filter_field, update_fields, read_pct,
         field, range_size, sort_field, sort_direction, limit,
-        match_field, match_value, group_field, accumulator, value_field):
+        match_field, match_value, group_field, accumulator, value_field, pipeline):
     """Run a benchmark workload."""
     from mdbpl.executor import WorkloadExecutor, parse_duration
     from mdbpl.workloads import REGISTRY
@@ -225,11 +223,22 @@ def run(workload, collection, database, threads, duration, tag, distribution,
         client = MongoClient(mongodb_uri)
         coll = client[database][collection]
         record_count = coll.count_documents({})
-        client.close()
 
         if record_count == 0:
+            client.close()
             click.echo(f"✗ Collection {database}.{collection} is empty. Run 'mdbpl init' first.", err=True)
             raise click.Abort()
+
+        # ---- sample _id pool if collection uses ObjectId ----------------
+        effective_filter = filter_field or "_id"
+        id_pool = None
+        if effective_filter == "_id" and workload in ("update", "point-read", "mixed"):
+            _sample = coll.find_one({}, {"_id": 1})
+            if _sample and not isinstance(_sample["_id"], str):
+                pool_size = min(record_count, 10_000)
+                id_pool = [doc["_id"] for doc in coll.find({}, {"_id": 1}).limit(pool_size)]
+
+        client.close()
 
         # ---- build workload-specific kwargs ------------------------------
         common = dict(database=database, collection=collection, record_count=record_count)
@@ -242,16 +251,18 @@ def run(workload, collection, database, threads, duration, tag, distribution,
             uf = [f.strip() for f in update_fields.split(",")] if update_fields else None
             benchmark = REGISTRY["update"](
                 **common,
-                filter_field=filter_field or "_id",
+                filter_field=effective_filter,
                 update_fields=uf,
                 distribution=distribution,
+                id_pool=id_pool,
             )
 
         elif workload == "point-read":
             benchmark = REGISTRY["point-read"](
                 **common,
-                filter_field=filter_field or "_id",
+                filter_field=effective_filter,
                 distribution=distribution,
+                id_pool=id_pool,
             )
 
         elif workload == "range-scan":
@@ -267,9 +278,10 @@ def run(workload, collection, database, threads, duration, tag, distribution,
             benchmark = REGISTRY["mixed"](
                 **common,
                 read_pct=read_pct,
-                filter_field=filter_field or "_id",
+                filter_field=effective_filter,
                 update_fields=uf,
                 distribution=distribution,
+                id_pool=id_pool,
             )
 
         elif workload == "top-n":
@@ -291,8 +303,14 @@ def run(workload, collection, database, threads, duration, tag, distribution,
                 value_field=value_field,
             )
 
+        elif workload == "raw":
+            if not pipeline:
+                click.echo("✗ --pipeline is required for the raw workload.", err=True)
+                click.echo("  Example: --pipeline '[{\"$match\": {\"region\": \"{{region:zipfian}}\"}}, {\"$limit\": 100}]'", err=True)
+                raise click.Abort()
+            benchmark = REGISTRY["raw"](**common, pipeline=pipeline)
+
         else:
-            # Legacy workloads (read-heavy, balanced, write-heavy)
             benchmark = REGISTRY[workload](**common)
 
     else:
@@ -571,21 +589,7 @@ def reset_db():
 
 @cli.command()
 def test():
-    """Test YCSB installation and MongoDB connection."""
-    click.echo("Testing YCSB installation...")
-    ycsb_home = os.getenv("YCSB_HOME", "/opt/ycsb")
-    if not os.path.exists(ycsb_home):
-        click.echo(f"✗ YCSB not found at {ycsb_home}")
-    else:
-        click.echo(f"✓ YCSB found at {ycsb_home}")
-        try:
-            result = subprocess.run(["java", "-version"], capture_output=True, text=True, timeout=5)
-            version_line = result.stderr.split("\n")[0] if result.stderr else "Unknown"
-            click.echo(f"✓ Java: {version_line}")
-        except Exception as e:
-            click.echo(f"✗ Java not found: {e}")
-
-    click.echo()
+    """Test MongoDB connection."""
     click.echo("Testing MongoDB connection...")
     mongodb_uri = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
     click.echo(f"  URI: {mongodb_uri}")

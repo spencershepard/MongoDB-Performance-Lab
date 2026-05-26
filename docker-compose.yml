@@ -19,6 +19,7 @@ services:
       - ./workloads:/workloads  # Mount custom workloads
     ports:
       - "8888:8888"
+    stdin_open: true  # Required for docker exec -i (MCP server)
 
 volumes:
   mongodb_data:

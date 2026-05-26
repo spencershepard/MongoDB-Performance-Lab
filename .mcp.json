@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "mongodb-perflab": {
+      "type": "stdio",
+      "command": "docker",
+      "args": ["compose", "exec", "-i", "perflab", "python", "mcp/server.py"]
+    }
+  }
+}

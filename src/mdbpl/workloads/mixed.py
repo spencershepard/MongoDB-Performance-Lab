@@ -1,10 +1,11 @@
 """Mixed workload — configurable read/write ratio over the same key space."""
 
-from ..workload import Benchmark
-from ..distributions import uniform, zipfian
 import random
 import string
 from typing import List, Optional
+
+from ..workload import Benchmark
+from ..distributions import uniform, zipfian
 
 
 def create_mixed_benchmark(
@@ -15,6 +16,7 @@ def create_mixed_benchmark(
     filter_field: str = "_id",
     update_fields: Optional[List[str]] = None,
     distribution: str = "uniform",
+    id_pool: Optional[List] = None,
 ) -> Benchmark:
     """Create a mixed read/write benchmark.
 
@@ -23,11 +25,12 @@ def create_mixed_benchmark(
         collection:    MongoDB collection name
         record_count:  Number of records (bounds distribution range)
         read_pct:      Percentage of operations that are reads (0-100). Default: 70.
-                       Remaining percentage are updates.
         filter_field:  Field used to locate documents for both reads and updates.
-                       Default: _id (YCSB format). Others match on integer values.
         update_fields: Fields overwritten by update operations. Default: ["field0"].
         distribution:  Key access pattern: uniform | zipfian.
+        id_pool:       Pre-sampled list of real _id values (ObjectIds). When
+                       provided and filter_field=="_id", lookups use this pool
+                       instead of generating YCSB-format strings.
 
     Example:
         mdbpl run --workload mixed --read-pct 80 --filter-field _id --update-fields field0,field1
@@ -56,14 +59,24 @@ def create_mixed_benchmark(
 
     @benchmark.operation(weight=read_pct, name="read")
     def read_op(col):
-        raw = dist.next()
-        filter_val = f"user{raw:010d}" if filter_field == "_id" else raw
+        if id_pool and filter_field == "_id":
+            filter_val = random.choice(id_pool)
+        elif filter_field == "_id":
+            raw = dist.next()
+            filter_val = f"user{raw:010d}"  # backward compat: YCSB string _id
+        else:
+            filter_val = dist.next()
         return col.find_one({filter_field: filter_val})
 
     @benchmark.operation(weight=write_pct, name="update")
     def update_op(col):
-        raw = dist.next()
-        filter_val = f"user{raw:010d}" if filter_field == "_id" else raw
+        if id_pool and filter_field == "_id":
+            filter_val = random.choice(id_pool)
+        elif filter_field == "_id":
+            raw = dist.next()
+            filter_val = f"user{raw:010d}"  # backward compat: YCSB string _id
+        else:
+            filter_val = dist.next()
         new_vals = {
             f: "".join(random.choices(string.ascii_lowercase + string.digits, k=20))
             for f in update_fields

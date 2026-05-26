@@ -7,7 +7,6 @@ RUN apt-get update && apt-get install -y \
     gcc \
     wget \
     tar \
-    default-jre-headless \
     && rm -rf /var/lib/apt/lists/*
 
 # Install MongoDB Shell (mongosh) - download standalone binary
@@ -19,15 +18,6 @@ RUN wget -q https://downloads.mongodb.com/compass/mongosh-${MONGOSH_VERSION}-lin
     chmod +x /usr/local/bin/mongosh && \
     rm -rf mongosh-${MONGOSH_VERSION}-linux-x64* && \
     mongosh --version
-
-# Install YCSB
-ENV YCSB_VERSION=0.17.0
-RUN wget -q https://github.com/brianfrankcooper/YCSB/releases/download/${YCSB_VERSION}/ycsb-${YCSB_VERSION}.tar.gz && \
-    tar xfz ycsb-${YCSB_VERSION}.tar.gz && \
-    mv ycsb-${YCSB_VERSION} /opt/ycsb && \
-    rm ycsb-${YCSB_VERSION}.tar.gz
-
-ENV YCSB_HOME=/opt/ycsb
 
 # Copy requirements first for better layer caching
 COPY requirements.txt .

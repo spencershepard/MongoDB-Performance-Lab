@@ -20,8 +20,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from dash import Dash, html, dcc, callback, Input, Output, State, no_update, ALL, MATCH, callback_context
 
-from ..demos import list_demos, get_demo
-from ..executor import WorkloadExecutor
+from ..demos import list_demos, get_demo, list_user_demos
 from ..storage import BenchmarkStorage
 import os
 
@@ -163,19 +162,14 @@ def create_dash_app(requests_pathname_prefix: str = "/") -> Dash:
                 }
                 
                 .header {
-                    background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
                     padding: 20px 30px;
-                    border-radius: 12px;
-                    box-shadow: 0 2px 4px rgba(0,0,0,0.08);
-                    margin-bottom: 30px;
                     display: flex;
-                    justify-content: flex-start;
+                    justify-content: center;
                     align-items: center;
-                    border: 1px solid #e2e8f0;
                 }
                 
                 .header-logo {
-                    height: 80px;
+                    height: 120px;
                     width: auto;
                 }
                 
@@ -531,8 +525,8 @@ def create_dash_app(requests_pathname_prefix: str = "/") -> Dash:
                 
                 .tabs-container .tab--selected {
                     background: white !important;
-                    color: #3b82f6 !important;
-                    border-bottom: 2px solid #3b82f6 !important;
+                    color: #7ecd36 !important;
+                    border-bottom: 2px solid #7ecd36 !important;
                 }
                 
                 .tab-content {
@@ -806,7 +800,7 @@ def create_dash_app(requests_pathname_prefix: str = "/") -> Dash:
                 }
                 
                 .footer-link:hover {
-                    color: #3b82f6;
+                    color: #7ecd36;
                 }
                 
                 .footer-icon {
@@ -1308,16 +1302,28 @@ def create_dash_app(requests_pathname_prefix: str = "/") -> Dash:
             dcc.Tabs(id="tabs", value="home", children=[
                 dcc.Tab(label="🧠 Learn", value="home", className="custom-tab"),
                 dcc.Tab(label="🪄 Demos", value="demos", className="custom-tab"),
-                dcc.Tab(label="⚡ Run Benchmark", value="run-benchmark", className="custom-tab"),
+                dcc.Tab(label="⚡ Your Workflows", value="workflows", className="custom-tab"),
                 dcc.Tab(label="📊 View Results", value="view-results", className="custom-tab"),
             ], className="tabs-container"),
             
             html.Div(id="tab-content", className="tab-content"),
         ], className="main-content"),
         
+        # Shared execution components (used by both Demos and Workflows tabs)
+        html.Div([
+            dcc.Store(id="selected-demo", data=None),
+            html.Div(id="demo-steps-container", children=[]),
+            dcc.Store(id="demo-execution-state", data={}),
+            dcc.Interval(
+                id="step-poll-interval",
+                interval=500,
+                n_intervals=0,
+                disabled=True
+            ),
+        ], className="main-content", style={"marginTop": "20px"}),
+        
         # Stores for tracking state
         dcc.Store(id="execution-state", data={"running": False, "result": None}),
-        dcc.Store(id="benchmark-state", data={"running": False, "result": None}),
         # Stores for View Results tab (must be in main layout for callbacks)
         dcc.Store(id="selected-runs", data=[]),
         dcc.Store(id="comparison-swap-state", data=False),
@@ -1372,89 +1378,52 @@ def render_home_tab():
 
 
 def render_demos_tab():
-    """Render the demos tab content with step-by-step execution."""
+    """Render the built-in demos tab content."""
     return html.Div([
-        html.H3("Interactive Demos", style={"marginBottom": "20px", "color": "#0f172a"}),
-        html.P("Learn MongoDB performance concepts through hands-on interactive demos. Execute each step at your own pace.", 
-               style={"marginBottom": "30px", "color": "#64748b"}),
-        
-        # Demo selector
+        html.P(
+            "Select a built-in demo to explore common MongoDB performance patterns. Each demo runs step-by-step benchmarks with real data.",
+            style={"color": "#64748b", "fontSize": "14px", "marginBottom": "20px"}
+        ),
         html.Div(id="demo-list", className="demo-list"),
-        dcc.Store(id="selected-demo", data=None),
-        
-        # Step-by-step execution area
-        html.Div(id="demo-steps-container", children=[]),
-        
-        # Stores for tracking step execution
-        dcc.Store(id="demo-execution-state", data={}),
-        
-        # Interval for polling step execution
-        dcc.Interval(
-            id="step-poll-interval",
-            interval=500,  # Poll every 500ms
-            n_intervals=0,
-            disabled=True
-        ),
     ])
 
 
-def render_run_benchmark_tab():
-    """Render the run benchmark tab content."""
+def render_workflows_tab():
+    """Render the user workflows tab content."""
     return html.Div([
         html.Div([
-            html.Label("Select Workload:", className="label"),
-            dcc.Dropdown(
-                id="workload-selector",
-                options=[],
-                placeholder="Choose a workload...",
-                className="dropdown"
+            html.Div([
+                html.H4("Your Custom Workflows", style={"margin": "0", "color": "#0f172a", "fontWeight": "700", "fontSize": "20px"}),
+                html.P(
+                    "Performance workflows generated by your coding agent. These are custom benchmarks tailored to your specific use cases.",
+                    style={"color": "#64748b", "fontSize": "14px", "marginTop": "8px", "marginBottom": "0"}
+                ),
+            ], style={"flex": "1"}),
+            html.Button(
+                "🗑️ Delete All",
+                id="delete-workflows-button",
+                n_clicks=0,
+                style={
+                    "backgroundColor": "#ef4444",
+                    "color": "white",
+                    "border": "none",
+                    "padding": "8px 16px",
+                    "borderRadius": "6px",
+                    "fontSize": "14px",
+                    "fontWeight": "600",
+                    "cursor": "pointer",
+                    "marginLeft": "20px",
+                }
             ),
-        ], className="selector-container"),
-        
-        html.Div(id="workload-description", className="description"),
-        
-        html.Div([
-            html.Div([
-                html.Label("Duration (seconds):", className="label"),
-                dcc.Input(
-                    id="duration-input",
-                    type="number",
-                    value=30,
-                    min=5,
-                    max=300,
-                    className="input"
-                ),
-            ], className="input-group", style={"width": "48%", "display": "inline-block"}),
-            
-            html.Div([
-                html.Label("Tag (optional):", className="label"),
-                dcc.Input(
-                    id="tag-input",
-                    type="text",
-                    placeholder="e.g., baseline, optimized",
-                    className="input"
-                ),
-            ], className="input-group", style={"width": "48%", "display": "inline-block", "marginLeft": "4%"}),
-        ]),
-        
-        html.Button(
-            "Run Benchmark",
-            id="run-benchmark-button",
-            n_clicks=0,
-            disabled=True,
-            className="run-button"
+        ], style={"display": "flex", "alignItems": "flex-start", "marginBottom": "20px"}),
+        dcc.ConfirmDialog(
+            id="confirm-delete-workflows-dialog",
+            message="Delete all agent-generated workflows? This cannot be undone."
         ),
-        
-        dcc.Loading(
-            id="benchmark-loading",
-            type="default",
-            children=[
-                html.Div(id="benchmark-status", className="status"),
-                html.Div(id="benchmark-results", children=[]),
-            ],
-            className="loading-container"
-        ),
+        html.Div(id="user-workflow-list"),
     ])
+
+
 
 
 def render_view_results_tab():
@@ -1520,42 +1489,67 @@ def setup_callbacks(app: Dash):
             return render_home_tab()
         elif tab == "demos":
             return render_demos_tab()
-        elif tab == "run-benchmark":
-            return render_run_benchmark_tab()
+        elif tab == "workflows":
+            return render_workflows_tab()
         elif tab == "view-results":
             return render_view_results_tab()
         return html.Div("Select a tab")
     
+    # Clear selection when switching tabs
+    @app.callback(
+        Output("selected-demo", "data", allow_duplicate=True),
+        Input("tabs", "value"),
+        prevent_initial_call=True
+    )
+    def clear_selection_on_tab_change(tab):
+        """Always clear demo selection when switching tabs."""
+        print(f"\n=== clear_selection_on_tab_change ===")
+        print(f"tab: {tab}")
+        print(f"RETURNING: None (clear selection)")
+        return None
+    
     # Demo tab callbacks
     @app.callback(
         Output("demo-list", "children"),
-        Input("demo-list", "id")
+        [Input("demo-list", "id"),
+         Input("selected-demo", "data")]
     )
-    def load_demo_list(_):
+    def load_demo_list(_, selected_demo):
         """Load available demos and display as clickable cards."""
         try:
             demos = list_demos()
             demo_cards = []
             
             for demo in demos:
+                is_selected = selected_demo == demo['name']
+                
                 card = html.Div([
                     html.Div([
-                        html.H4(demo['title'], style={"marginBottom": "8px", "color": "#0f172a"}),
+                        html.Div([
+                            html.H4(demo['title'], style={"marginBottom": "8px", "color": "#0f172a", "display": "flex", "alignItems": "center", "gap": "8px"}),
+                            html.Span("✓ Selected", style={
+                                "fontSize": "12px",
+                                "fontWeight": "600",
+                                "color": "#16a34a",
+                                "display": "inline" if is_selected else "none"
+                            }),
+                        ], style={"display": "flex", "alignItems": "center", "gap": "8px"}),
                         html.P(demo['description'], style={"color": "#64748b", "fontSize": "14px", "marginBottom": "0"}),
                     ], style={"flex": "1"}),
                     html.Button(
-                        "Select →",
+                        "✓ Selected" if is_selected else "Select →",
                         id={"type": "demo-select-btn", "index": demo['name']},
                         n_clicks=0,
                         style={
-                            "background": "#3b82f6",
+                            "background": "#16a34a" if is_selected else "#3b82f6",
                             "color": "white",
                             "border": "none",
                             "padding": "8px 16px",
                             "borderRadius": "6px",
                             "cursor": "pointer",
                             "fontSize": "14px",
-                            "fontWeight": "600"
+                            "fontWeight": "600",
+                            "minWidth": "100px"
                         }
                     )
                 ], className="demo-card", style={
@@ -1563,12 +1557,13 @@ def setup_callbacks(app: Dash):
                     "alignItems": "center",
                     "gap": "20px",
                     "padding": "20px",
-                    "background": "#f8fafc",
+                    "background": "#f0fdf4" if is_selected else "#f8fafc",
                     "borderRadius": "8px",
-                    "border": "1px solid #e2e8f0",
+                    "border": f"2px solid {'#16a34a' if is_selected else '#e2e8f0'}",
                     "marginBottom": "12px",
                     "cursor": "pointer",
-                    "transition": "all 0.2s"
+                    "transition": "all 0.2s",
+                    "boxShadow": "0 4px 6px rgba(22, 163, 74, 0.15)" if is_selected else "none"
                 })
                 demo_cards.append(card)
             
@@ -1583,30 +1578,74 @@ def setup_callbacks(app: Dash):
     )
     def select_demo(n_clicks):
         """Handle demo selection from button clicks."""
+        print(f"\n=== select_demo CALLED ===")
+        print(f"n_clicks: {n_clicks}")
+        print(f"ctx.triggered: {callback_context.triggered}")
+        
         if not callback_context.triggered:
+            print("RETURNING: no_update (no trigger)")
             return no_update
         
         # Get which button was clicked
         triggered_id = callback_context.triggered[0]["prop_id"]
         if not triggered_id or triggered_id == ".":
+            print("RETURNING: no_update (invalid trigger)")
+            return no_update
+        
+        # Check if this was an actual click (n_clicks > 0) vs just button rendering (n_clicks = 0)
+        triggered_value = callback_context.triggered[0]["value"]
+        if not triggered_value or triggered_value == 0:
+            print("RETURNING: no_update (no actual click, just button render)")
             return no_update
         
         # Parse the button ID to get demo name
         button_id = json.loads(triggered_id.split(".")[0])
         demo_name = button_id["index"]
         
+        print(f"RETURNING: {demo_name}")
         return demo_name
     
     @app.callback(
         [Output("demo-steps-container", "children"),
+         Output("demo-steps-container", "style"),
          Output("demo-execution-state", "data")],
-        Input("selected-demo", "data"),
-        prevent_initial_call=False  # Need to allow initial call to clear when no demo selected
+        [Input("selected-demo", "data"),
+         Input("tabs", "value")],
+        prevent_initial_call=False
     )
-    def render_demo_steps(demo_name):
+    def render_demo_steps(demo_name, current_tab):
         """Render step-by-step execution interface when demo is selected."""
+        
+        # DEBUG: Log all callback invocations
+        print(f"\n=== render_demo_steps CALLED ===")
+        print(f"demo_name: {demo_name}")
+        print(f"current_tab: {current_tab}")
+        
+        # Create placeholder for empty state
+        placeholder = html.Div([
+            html.Div("👆", style={"fontSize": "48px", "marginBottom": "16px"}),
+            html.H3("Select a demo or workflow to get started", 
+                   style={"color": "#64748b", "fontWeight": "600", "marginBottom": "8px"}),
+            html.P("Choose from the tabs above to explore performance optimization techniques",
+                  style={"color": "#94a3b8", "fontSize": "14px"})
+        ], style={
+            "display": "flex",
+            "flexDirection": "column",
+            "alignItems": "center",
+            "justifyContent": "center",
+            "padding": "80px 20px",
+            "textAlign": "center"
+        })
+        
+        # Hide on non-demo tabs
+        if current_tab not in ["demos", "workflows"]:
+            print(f"RETURNING: Hide (non-demo tab)")
+            return [], {"display": "none"}, {}
+        
+        # Show placeholder if no demo selected
         if not demo_name:
-            return [], {}
+            print(f"RETURNING: Placeholder (no demo selected)")
+            return placeholder, {"display": "block"}, {}
         
         try:
             # Clear any previous demo execution state
@@ -1797,10 +1836,12 @@ def setup_callbacks(app: Dash):
             )
             step_cards.append(completion_card)
             
-            return step_cards, initial_state
+            print(f"RETURNING: Demo steps (demo loaded successfully)")
+            return step_cards, {"display": "block"}, initial_state
             
         except Exception as e:
-            return [html.Div(f"Error loading demo: {e}", style={"color": "#ef4444"})], {}
+            print(f"RETURNING: Error loading demo: {e}")
+            return [html.Div(f"Error loading demo: {e}", style={"color": "#ef4444"})], {"display": "block"}, {}
     
     @app.callback(
         [Output("demo-execution-state", "data", allow_duplicate=True),
@@ -1821,9 +1862,6 @@ def setup_callbacks(app: Dash):
         
         # Determine which button was clicked
         triggered_id = callback_context.triggered[0]["prop_id"]
-        if not triggered_id or triggered_id == "." or ".n_clicks" not in triggered_id:
-            return no_update, no_update
-        
         button_id = json.loads(triggered_id.split(".")[0])
         step_index = button_id["index"]
         
@@ -1850,22 +1888,28 @@ def setup_callbacks(app: Dash):
         def run_step():
             """Execute step in background."""
             global _demo_execution_state
+            print(f"DEBUG: Background thread starting for step {step_index}, demo {demo_name}")
             try:
                 step, success = demo.execute_step(step_index)
                 # Store result in global state for polling callback to pick up
                 step_key = f"step_{demo_name}_{step_index}"
+                print(f"DEBUG: Step {step_index} completed successfully, storing in global state with key: {step_key}")
                 _demo_execution_state[step_key] = {
                     "step": step.to_dict(),
                     "success": success,
                     "completed": True
                 }
+                print(f"DEBUG: Step result stored. Global state keys: {list(_demo_execution_state.keys())}")
             except Exception as e:
                 step_key = f"step_{demo_name}_{step_index}"
+                print(f"DEBUG: Step {step_index} failed with error: {e}")
                 _demo_execution_state[step_key] = {
                     "error": str(e),
                     "success": False,
                     "completed": True
                 }
+                print(f"DEBUG: Error result stored. Global state keys: {list(_demo_execution_state.keys())}")
+
         
         thread = threading.Thread(target=run_step, daemon=True)
         thread.start()
@@ -2472,133 +2516,6 @@ def setup_callbacks(app: Dash):
             return "view-results"
         return no_update
     
-    # Benchmark tab callbacks
-    @app.callback(
-        Output("workload-selector", "options"),
-        Input("workload-selector", "id")
-    )
-    def load_workloads(_):
-        """Load available workloads."""
-        try:
-            workloads = ["read-heavy", "balanced", "write-heavy", "range-scan"]
-            return [{"label": w, "value": w} for w in workloads]
-        except Exception as e:
-            return [{"label": f"Error: {e}", "value": "error"}]
-    
-    @app.callback(
-        [Output("workload-description", "children"),
-         Output("run-benchmark-button", "disabled")],
-        Input("workload-selector", "value")
-    )
-    def update_workload_info(workload_name):
-        """Update workload description when selection changes."""
-        if not workload_name or workload_name == "error":
-            return "", True
-        
-        try:
-            workload_descriptions = {
-                "read-heavy": "95% reads, 5% updates (YCSB Workload B)",
-                "balanced": "50% reads, 50% updates (YCSB Workload A)",
-                "write-heavy": "10% reads, 90% updates (YCSB Workload E)",
-                "range-scan": "80% range queries, 20% point reads"
-            }
-            description = html.Div([
-                html.P(workload_descriptions.get(workload_name, "No description available")),
-                html.P(f"Distribution: zipfian", 
-                       style={"fontSize": "14px", "color": "#64748b"})
-            ], className="demo-description")
-            return description, False
-        except Exception as e:
-            return html.Div(f"Error loading workload: {e}", className="error"), True
-    
-    @app.callback(
-        [Output("benchmark-state", "data"),
-         Output("benchmark-status", "children"),
-         Output("benchmark-results", "children")],
-        Input("run-benchmark-button", "n_clicks"),
-        [State("workload-selector", "value"),
-         State("duration-input", "value"),
-         State("tag-input", "value"),
-         State("benchmark-state", "data")]
-    )
-    def run_benchmark_workload(n_clicks, workload_name, duration, tag, state):
-        """Execute a benchmark workload."""
-        if n_clicks == 0 or not workload_name:
-            return no_update, no_update, no_update
-        
-        if state.get("running"):
-            return no_update, no_update, no_update
-        
-        try:
-            # Load Python benchmark
-            if workload_name == "read-heavy":
-                from mdbpl import create_read_heavy_benchmark
-                workload = create_read_heavy_benchmark()
-            elif workload_name == "balanced":
-                from mdbpl import create_balanced_benchmark
-                workload = create_balanced_benchmark()
-            elif workload_name == "write-heavy":
-                from mdbpl import create_write_heavy_benchmark
-                workload = create_write_heavy_benchmark()
-            elif workload_name == "range-scan":
-                from mdbpl import create_range_scan_benchmark
-                workload = create_range_scan_benchmark()
-            else:
-                raise ValueError(f"Unknown workload: {workload_name}")
-            
-            # Create executor
-            executor_instance = WorkloadExecutor(
-                workload=workload,
-                mongodb_uri=MONGODB_URI,
-                record_count=10000  # Default record count
-            )
-            
-            # Update status
-            status = html.Span("⏳ Running benchmark... This may take a minute.", className="status-running")
-            
-            # Run benchmark
-            result = executor_instance.run(duration or 30, tag or "")
-            
-            # Save to storage
-            run_id = storage.save_result(
-                result=result,
-                tag=tag or ""
-            )
-            
-            # Update state
-            new_state = {"running": False, "result": result}
-            success_status = html.Span(f"✅ Benchmark completed! Run ID: {run_id}", className="status-success")
-            
-            # Create results display
-            results_display = html.Div([
-                html.H3("📊 Results", className="results-title"),
-                html.Div([
-                    html.Div([
-                        html.Label("Throughput:"),
-                        html.Span(f"{result.operations_per_second:.2f} ops/sec", className="metric-value")
-                    ], className="metric-item"),
-                    html.Div([
-                        html.Label("Latency P50:"),
-                        html.Span(f"{result.latency_p50:.3f} ms", className="metric-value")
-                    ], className="metric-item"),
-                    html.Div([
-                        html.Label("Latency P95:"),
-                        html.Span(f"{result.latency_p95:.3f} ms", className="metric-value")
-                    ], className="metric-item"),
-                    html.Div([
-                        html.Label("Latency P99:"),
-                        html.Span(f"{result.latency_p99:.3f} ms", className="metric-value")
-                    ], className="metric-item"),
-                ], style={"display": "grid", "gridTemplateColumns": "repeat(2, 1fr)", "gap": "16px", "marginTop": "20px"})
-            ])
-            
-            return new_state, success_status, results_display
-            
-        except Exception as e:
-            new_state = {"running": False, "result": None}
-            error_status = html.Span(f"❌ Error: {str(e)}", className="status-error")
-            return new_state, error_status, html.Div()
-    
     # View results tab callbacks
     @app.callback(
         Output("results-list", "children"),
@@ -2919,6 +2836,40 @@ def setup_callbacks(app: Dash):
             return True
         return False
     
+    # User workflows callbacks
+    @app.callback(
+        Output("user-workflow-list", "children"),
+        [Input("user-workflow-list", "id"),
+         Input("selected-demo", "data")]
+    )
+    def load_user_workflows(_, selected_demo):
+        """Load agent-generated workflows from the user demos directory."""
+        return _render_workflow_cards(selected_demo)
+
+    @app.callback(
+        Output("confirm-delete-workflows-dialog", "displayed"),
+        Input("delete-workflows-button", "n_clicks"),
+        prevent_initial_call=True
+    )
+    def show_delete_workflows_dialog(n_clicks):
+        if n_clicks:
+            return True
+        return False
+
+    @app.callback(
+        Output("user-workflow-list", "children", allow_duplicate=True),
+        Input("confirm-delete-workflows-dialog", "submit_n_clicks"),
+        prevent_initial_call=True
+    )
+    def delete_all_workflows(submit_n_clicks):
+        if not submit_n_clicks:
+            return no_update
+        user_demos_dir = Path("/data/user_demos")
+        if user_demos_dir.exists():
+            for f in user_demos_dir.glob("*.py"):
+                f.unlink()
+        return _render_workflow_cards(selected_demo=None)
+
     # Handle confirmation dialog result
     @app.callback(
         Output("results-list", "children", allow_duplicate=True),
@@ -2954,6 +2905,69 @@ def setup_callbacks(app: Dash):
                     }
                 )
         return no_update
+
+
+def _empty_workflows_state():
+    return html.Div([
+        html.Div("🤖", style={"fontSize": "40px", "marginBottom": "12px"}),
+        html.P("No workflows yet.", style={"fontWeight": "600", "marginBottom": "8px", "color": "#0f172a"}),
+        html.P(
+            "Connect your agent via MCP and ask it to benchmark a query. Workflows it generates will appear here.",
+            style={"fontSize": "14px", "color": "#64748b"}
+        ),
+    ], style={
+        "textAlign": "center", "padding": "48px 24px",
+        "background": "#f8fafc", "borderRadius": "8px",
+        "border": "1px dashed #cbd5e1",
+    })
+
+
+def _render_workflow_cards(selected_demo=None):
+    from ..demos import list_user_demos
+    user_demos = list_user_demos()
+    if not user_demos:
+        return _empty_workflows_state()
+    cards = []
+    for demo in user_demos:
+        is_selected = selected_demo == demo["name"]
+        card = html.Div([
+            html.Div([
+                html.Div([
+                    html.H4(demo["title"], style={"marginBottom": "8px", "color": "#0f172a", "fontSize": "16px", "fontWeight": "700"}),
+                    html.Span("✓ Selected", style={
+                        "fontSize": "12px",
+                        "fontWeight": "600",
+                        "color": "#16a34a",
+                        "display": "inline" if is_selected else "none",
+                        "marginLeft": "8px"
+                    }),
+                ], style={"display": "flex", "alignItems": "center"}),
+                html.P(demo["description"], style={"color": "#64748b", "fontSize": "14px", "marginBottom": "0"}),
+            ], style={"flex": "1"}),
+            html.Button(
+                "✓ Selected" if is_selected else "Open →",
+                id={"type": "demo-select-btn", "index": demo["name"]},
+                n_clicks=0,
+                style={
+                    "background": "#16a34a" if is_selected else "#7c3aed",
+                    "color": "white", "border": "none",
+                    "padding": "8px 16px", "borderRadius": "6px", "cursor": "pointer",
+                    "fontSize": "14px", "fontWeight": "600",
+                    "minWidth": "100px"
+                }
+            )
+        ], style={
+            "display": "flex", "alignItems": "center", "gap": "20px",
+            "padding": "20px",
+            "background": "#f0fdf4" if is_selected else "#faf5ff",
+            "borderRadius": "8px",
+            "border": f"2px solid {'#16a34a' if is_selected else '#e9d5ff'}",
+            "marginBottom": "12px",
+            "transition": "all 0.2s",
+            "boxShadow": "0 4px 6px rgba(22, 163, 74, 0.15)" if is_selected else "none"
+        })
+        cards.append(card)
+    return html.Div(cards)
 
 
 def extract_changes(steps: list) -> list:
