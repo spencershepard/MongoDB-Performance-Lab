@@ -33,7 +33,7 @@ RUN pip install --no-cache-dir -e .
 RUN mkdir -p /data
 
 # Expose API port
-EXPOSE 8080
+EXPOSE 8888
 
 # Default command (can be overridden in docker-compose)
 CMD ["mdbpl", "serve", "--host", "0.0.0.0", "--port", "8888"]

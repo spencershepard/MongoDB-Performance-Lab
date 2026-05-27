@@ -3,13 +3,14 @@
 Runs inside the perflab container via:
   docker compose exec -i perflab python mcp/server.py
 
-Exposes 6 tools to VS Code agents:
-  get_analysis_guide  — how to find MongoDB queries in user code
-  get_demo_examples   — workflow instructions + built-in demo source code
-  get_best_practices  — indexing and query optimization reference
-  get_schema          — introspect a live MongoDB collection
-  explain_query       — run explain("executionStats") on any pipeline or find query
-  execute_demo        — run an agent-generated Demo subclass, return results
+Exposes 7 tools to VS Code agents:
+  get_analysis_guide    — how to find MongoDB queries in user code
+  get_demo_examples     — workflow instructions + built-in workflow source code
+  get_best_practices    — indexing and query optimization reference
+  get_schema            — introspect a live MongoDB collection
+  explain_query         — run explain("executionStats") on any pipeline or find query
+  list_user_workflows   — list all user/agent-generated workflows in /data/user_demos/
+  execute_demo          — run an agent-generated workflow, return results
 """
 
 import importlib.util
@@ -139,14 +140,14 @@ def get_demo_examples(demo_name: str = "list") -> str:
 
     demo_name:
       "list"   — (default) return the workflow guide + a compact registry of all
-                 available demos discovered from the demos directory. Use this
-                 first to pick the closest match to the user's scenario.
-      "<id>"   — return the workflow guide + full source for that specific demo.
+                 available built-in workflows discovered from the demos directory.
+                 Use this first to pick the closest match to the user's scenario.
+      "<id>"   — return the workflow guide + full source for that specific workflow.
                  Call with demo_name="list" first to see valid IDs.
 
     Workflow:
-      1. Call get_demo_examples() to see available demos and pick the closest match.
-      2. Call get_demo_examples(demo_name="<id>") to load that demo's full source.
+      1. Call get_demo_examples() to see available workflows and pick the closest match.
+      2. Call get_demo_examples(demo_name="<id>") to load that workflow's full source.
       3. Adapt it for the user's schema and run via execute_demo().
     """
     guide = _WORKFLOW_GUIDE.read_text(encoding="utf-8") if _WORKFLOW_GUIDE.exists() else ""
@@ -158,15 +159,15 @@ def get_demo_examples(demo_name: str = "list") -> str:
             step_count = len(cls().steps())
             rows.append(f"  {demo_id:<24} {step_count} steps  {cls.description}")
         registry = (
-            "# Available Demo Examples\n\n"
+            "# Available Built-in Workflows\n\n"
             + "\n".join(rows)
-            + "\n\nCall get_demo_examples(demo_name=\"<id>\") to load the full source for any demo."
+            + "\n\nCall get_demo_examples(demo_name=\"<id>\") to load the full source for any workflow."
         )
         return (guide + "\n\n---\n\n" + registry) if guide else registry
 
     if demo_name not in demos:
         available = ", ".join(f'"{k}"' for k in demos)
-        return f'Unknown demo "{demo_name}". Available: {available}. Use demo_name="list" to see descriptions.'
+        return f'Unknown workflow "{demo_name}". Available: {available}. Use demo_name="list" to see descriptions.'
 
     path, _ = demos[demo_name]
     source_block = (
@@ -543,6 +544,50 @@ def explain_query(
 
     finally:
         client.close()
+
+
+# ---------------------------------------------------------------------------
+# execute_demo
+# ---------------------------------------------------------------------------
+# list_user_workflows
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+def list_user_workflows() -> str:
+    """
+    List all user/agent-generated workflows saved in /data/user_demos/.
+    
+    These are custom workflows created by agents via execute_demo() and persisted
+    for reuse. Each workflow is a complete Demo subclass that can be run via the
+    UI or CLI.
+    
+    Returns JSON array of workflow metadata:
+      [{"name": "...", "title": "...", "description": "...", "steps": N}, ...]
+    
+    Use this to discover workflows that agents have already built for similar
+    scenarios, avoiding duplicate work.
+    """
+    from mdbpl.demos import list_user_demos
+    
+    try:
+        workflows = list_user_demos()
+        if not workflows:
+            return json.dumps({
+                "workflows": [],
+                "message": "No user-generated workflows found. Workflows are saved when execute_demo() completes successfully."
+            })
+        
+        return json.dumps({
+            "workflows": workflows,
+            "count": len(workflows),
+            "location": "/data/user_demos/"
+        }, indent=2)
+    
+    except Exception as e:
+        return json.dumps({
+            "workflows": [],
+            "error": str(e)
+        })
 
 
 # ---------------------------------------------------------------------------

@@ -314,6 +314,13 @@ These rules prevent the most common LLM workflow generation mistakes:
     named `mongodb` in docker-compose.yml. Do not use `localhost`, `mongo`, or any
     other hostname. The correct value is always `mongodb://mongodb:27017`.
 
+13. **Always call `get_demo_examples` before using `execute_demo`.**
+    When using the execute_demo tool, ALWAYS call `get_demo_examples(demo_name="<id>")`
+    first to retrieve working code as a reference. The workflow guide describes concepts,
+    but actual demo source code shows the exact Python structure, imports, and DemoStep
+    nesting required. Never attempt to write Demo subclasses from memory or documentation
+    alone—concrete examples prevent structural errors.
+
 ---
 
 ## Workflow patterns — when to use each
