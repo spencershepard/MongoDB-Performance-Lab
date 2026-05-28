@@ -68,7 +68,14 @@ class BenchmarkStorage:
                     total_docs_returned INTEGER DEFAULT 0,
                     operations_with_explain INTEGER DEFAULT 0,
                     index_scans INTEGER DEFAULT 0,
-                    collection_scans INTEGER DEFAULT 0
+                    collection_scans INTEGER DEFAULT 0,
+                    collection_size INTEGER DEFAULT 0,
+                    schema_name TEXT DEFAULT NULL,
+                    source TEXT DEFAULT NULL,
+                    collection_name TEXT DEFAULT NULL,
+                    database_name TEXT DEFAULT NULL,
+                    workflow_name TEXT DEFAULT NULL,
+                    workflow_title TEXT DEFAULT NULL
                 )
             """)
             
@@ -101,6 +108,9 @@ class BenchmarkStorage:
                 ON operation_metrics(run_id)
             """)
             
+            # Migrate existing databases to add new columns if they don't exist
+            self._migrate_schema(cursor)
+            
             conn.commit()
             conn.close()
         except sqlite3.Error as e:
@@ -109,6 +119,31 @@ class BenchmarkStorage:
         except Exception as e:
             print(f"ERROR: Unexpected error during database initialization: {e}")
             raise
+    
+    def _migrate_schema(self, cursor):
+        """Add new columns to existing tables if they don't exist."""
+        try:
+            # Check if new columns exist
+            cursor.execute("PRAGMA table_info(runs)")
+            columns = [row[1] for row in cursor.fetchall()]
+            
+            # Add missing columns
+            if 'collection_size' not in columns:
+                cursor.execute("ALTER TABLE runs ADD COLUMN collection_size INTEGER DEFAULT 0")
+            if 'schema_name' not in columns:
+                cursor.execute("ALTER TABLE runs ADD COLUMN schema_name TEXT DEFAULT NULL")
+            if 'source' not in columns:
+                cursor.execute("ALTER TABLE runs ADD COLUMN source TEXT DEFAULT NULL")
+            if 'collection_name' not in columns:
+                cursor.execute("ALTER TABLE runs ADD COLUMN collection_name TEXT DEFAULT NULL")
+            if 'database_name' not in columns:
+                cursor.execute("ALTER TABLE runs ADD COLUMN database_name TEXT DEFAULT NULL")
+            if 'workflow_name' not in columns:
+                cursor.execute("ALTER TABLE runs ADD COLUMN workflow_name TEXT DEFAULT NULL")
+            if 'workflow_title' not in columns:
+                cursor.execute("ALTER TABLE runs ADD COLUMN workflow_title TEXT DEFAULT NULL")
+        except Exception as e:
+            print(f"Warning: Schema migration failed: {e}")
     
     def reset_db(self):
         """Delete the database file to start fresh."""
@@ -120,13 +155,21 @@ class BenchmarkStorage:
             return True
         return False
     
-    def save_result(self, result: BenchmarkResult, tag: str) -> int:
+    def save_result(self, result: BenchmarkResult, tag: str, collection_size: int = 0, 
+                    schema_name: Optional[str] = None, source: Optional[str] = None, 
+                    collection_name: Optional[str] = None, database_name: Optional[str] = None,
+                    workflow_name: Optional[str] = None, workflow_title: Optional[str] = None) -> int:
         """
         Save a benchmark result to the database.
         
         Args:
             result: Benchmark result to save
             tag: Tag for this benchmark run
+            collection_size: Number of documents in collection at benchmark time
+            schema_name: Name of schema used (e.g., 'videogame', 'ecommerce', 'default')
+            source: Source of benchmark ('demo', 'mcp', 'cli')
+            collection_name: Name of MongoDB collection
+            database_name: Name of MongoDB database
             
         Returns:
             Run ID of the saved result
@@ -143,8 +186,9 @@ class BenchmarkStorage:
                 total_operations, successful_operations, failed_operations,
                 operations_per_second, latency_p50, latency_p95, latency_p99,
                 total_docs_examined, total_docs_returned, operations_with_explain,
-                index_scans, collection_scans
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                index_scans, collection_scans, collection_size, schema_name, source,
+                collection_name, database_name, workflow_name, workflow_title
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             result.workload_name,
             tag,
@@ -161,10 +205,19 @@ class BenchmarkStorage:
             result.total_docs_returned,
             result.operations_with_explain,
             result.index_scans,
-            result.collection_scans
+            result.collection_scans,
+            collection_size,
+            schema_name,
+            source,
+            collection_name,
+            database_name,
+            workflow_name,
+            workflow_title
         ))
         
         run_id = cursor.lastrowid
+        if run_id is None:
+            raise RuntimeError("Failed to get run_id after insert")
         
         # Insert operation metrics
         for op_name, latencies in result.operation_metrics.items():

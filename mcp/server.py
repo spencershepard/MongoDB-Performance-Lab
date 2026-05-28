@@ -618,11 +618,15 @@ def execute_demo(demo_code: str, mongodb_uri: str, timeout_seconds: int = 300) -
     from mdbpl.demos.base import Demo
 
     old_uri = os.environ.get("MONGODB_URI")
+    old_source = os.environ.get("MDBPL_DEMO_SOURCE")
+    old_workflow_id = os.environ.get("MDBPL_WORKFLOW_ID")
+    old_workflow_title = os.environ.get("MDBPL_WORKFLOW_TITLE")
     tmp_path = None
 
     try:
         os.environ["MONGODB_URI"] = mongodb_uri
-
+        os.environ["MDBPL_DEMO_SOURCE"] = "mcp"  # Mark this execution as MCP-originated
+        
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".py", delete=False, dir="/tmp", encoding="utf-8"
         ) as f:
@@ -646,13 +650,20 @@ def execute_demo(demo_code: str, mongodb_uri: str, timeout_seconds: int = 300) -
                 "error_type": "structure",
             })
 
-        # Persist to user demos directory so the UI can discover and re-run it
-        user_demos_dir = Path("/data/user_demos")
-        user_demos_dir.mkdir(parents=True, exist_ok=True)
-        (user_demos_dir / f"{demo_classes[0].id}.py").write_text(demo_code, encoding="utf-8")
-
         demo_instance = demo_classes[0]()
+        
+        # Set workflow ID and title in environment for CommandExecutor to pick up
+        os.environ["MDBPL_WORKFLOW_ID"] = demo_instance.id
+        os.environ["MDBPL_WORKFLOW_TITLE"] = demo_instance.title
+        
         result = demo_instance.run()
+        
+        # Only persist to user demos directory if execution was successful
+        if result.success:
+            user_demos_dir = Path("/data/user_demos")
+            user_demos_dir.mkdir(parents=True, exist_ok=True)
+            (user_demos_dir / f"{demo_classes[0].id}.py").write_text(demo_code, encoding="utf-8")
+        
         return json.dumps(result.to_dict(), default=str)
 
     except SyntaxError as e:
@@ -677,6 +688,18 @@ def execute_demo(demo_code: str, mongodb_uri: str, timeout_seconds: int = 300) -
             os.environ["MONGODB_URI"] = old_uri
         else:
             os.environ.pop("MONGODB_URI", None)
+        if old_source is not None:
+            os.environ["MDBPL_DEMO_SOURCE"] = old_source
+        else:
+            os.environ.pop("MDBPL_DEMO_SOURCE", None)
+        if old_workflow_id is not None:
+            os.environ["MDBPL_WORKFLOW_ID"] = old_workflow_id
+        else:
+            os.environ.pop("MDBPL_WORKFLOW_ID", None)
+        if old_workflow_title is not None:
+            os.environ["MDBPL_WORKFLOW_TITLE"] = old_workflow_title
+        else:
+            os.environ.pop("MDBPL_WORKFLOW_TITLE", None)
 
 
 # ---------------------------------------------------------------------------

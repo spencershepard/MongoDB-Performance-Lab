@@ -41,12 +41,12 @@
 
 - [ ] Create a 'CICD integration test' for this project's own CI/CD pipeline — runs a benchmark against a known dataset and checks for expected performance improvements after indexing.
 
-- [ ] Atlas-specific feature coverage — Atlas Search indexes, time series collections, Atlas Vector Search performance, and the Atlas Performance Advisor workflow.
-
-- [ ] Allow MCP generated workflows to be viewed/run from the UI.  This should happen at the tool level - generated code should end up in a non-ephemeral directory that the UI can read from. 
+- [x] Allow MCP generated workflows to be viewed/run from the UI.  This should happen at the tool level - generated code should end up in a non-ephemeral directory that the UI can read from. 
 
 - [ ] MCP generated benchmarks should link to the workflow and results in the UI for easy navigation.
 
 - [ ] Consider reducing default benchmark runtime for quicker iteration; in demos and agent workflows.
 
 - [ ] Add demo for scale comparison (will need to use different collection names for same dataset at different scales)
+
+- [x] Add clarity to benchmark results list (ie "range-scan" is too vague).  Consider other descriptors such as collection size, schema, source (MCP vs demo) 

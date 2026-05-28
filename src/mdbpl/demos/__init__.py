@@ -73,10 +73,12 @@ def list_user_demos() -> list[dict]:
             spec.loader.exec_module(mod)
             for _, cls in _inspect.getmembers(mod, _inspect.isclass):
                 if issubclass(cls, Demo) and cls is not Demo and hasattr(cls, "id"):
+                    instance = cls()
                     result.append({
-                        "name": cls.id,
-                        "title": getattr(cls, "title", cls.id),
-                        "description": getattr(cls, "description", ""),
+                        "name": instance.id,
+                        "title": getattr(instance, "title", instance.id),
+                        "description": getattr(instance, "description", ""),
+                        "steps": len(instance.steps()),
                     })
                     break
         except Exception:

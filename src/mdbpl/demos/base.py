@@ -137,12 +137,27 @@ class DemoStep:
 class CommandExecutor:
     """Executes demo commands and captures output."""
     
-    def __init__(self, mongodb_uri: Optional[str] = None, verbose: bool = True):
+    def __init__(self, mongodb_uri: Optional[str] = None, verbose: bool = True, source: Optional[str] = None, workflow_id: Optional[str] = None, workflow_title: Optional[str] = None):
         self.mongodb_uri = mongodb_uri or os.getenv("MONGODB_URI", "mongodb://localhost:27017")
         self.verbose = verbose
+        # Check environment variable first, then use parameter, default to 'demo'
+        self.source = source or os.getenv("MDBPL_DEMO_SOURCE", "demo")
+        self.workflow_id = workflow_id or os.getenv("MDBPL_WORKFLOW_ID")
+        self.workflow_title = workflow_title or os.getenv("MDBPL_WORKFLOW_TITLE")
     
     def execute_shell(self, command: str) -> dict:
         """Execute a shell command and return result."""
+        # Inject flags for mdbpl run commands if not already present
+        if 'mdbpl run' in command:
+            if '--source' not in command and self.source:
+                command = command + f" --source {self.source}"
+            if '--workflow-name' not in command and self.workflow_id:
+                command = command + f" --workflow-name {self.workflow_id}"
+            if '--workflow-title' not in command and self.workflow_title:
+                # Escape quotes in title for shell
+                escaped_title = self.workflow_title.replace('"', '\\"')
+                command = command + f' --workflow-title "{escaped_title}"'
+        
         if self.verbose:
             print(f"  $ {command}")
         
@@ -308,7 +323,25 @@ class CommandExecutor:
         run_id = None
         try:
             storage = BenchmarkStorage(db_path=db_path)
-            run_id = storage.save_result(result, tag=command.tag)
+            
+            # Get collection size
+            from pymongo import MongoClient
+            client = MongoClient(self.mongodb_uri)
+            coll = client[command.database][command.collection]
+            collection_size = coll.count_documents({})
+            client.close()
+            
+            run_id = storage.save_result(
+                result, 
+                tag=command.tag,
+                collection_size=collection_size,
+                schema_name=None,  # WorkloadCommand doesn't track schema
+                source=self.source,
+                collection_name=command.collection,
+                database_name=command.database,
+                workflow_name=self.workflow_id,
+                workflow_title=self.workflow_title
+            )
         except Exception as e:
             if self.verbose:
                 print(f"  Warning: Could not save result to storage: {e}")
@@ -394,6 +427,7 @@ class Demo(ABC):
     title: str = ""
     description: str = ""
     markdown_file: str = ""  # e.g., "index-performance.md"
+    schema_name: str = None  # e.g., "videogame", "ecommerce", "default"
     
     @abstractmethod
     def steps(self) -> List[DemoStep]:
@@ -416,7 +450,7 @@ class Demo(ABC):
             raise ValueError(f"Invalid step index: {step_index}. Valid range: 0-{len(demo_steps)-1}")
         
         step = demo_steps[step_index]
-        executor = CommandExecutor(verbose=verbose)
+        executor = CommandExecutor(verbose=verbose, workflow_id=self.id, workflow_title=self.title)
         
         if verbose:
             print(f"\n[Step {step_index + 1}/{len(demo_steps)}] {step.title}")

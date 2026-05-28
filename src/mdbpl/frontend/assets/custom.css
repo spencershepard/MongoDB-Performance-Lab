@@ -1,0 +1,8 @@
+/* Override github.css syntax highlighting for better visibility */
+
+/* Strings, regexes, and meta strings - use lime green instead of dark blue */
+.hljs-regexp, 
+.hljs-string, 
+.hljs-meta .hljs-string {
+    color: #8fc70e !important;
+}

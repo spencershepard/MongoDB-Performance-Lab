@@ -180,10 +180,20 @@ def _print_results(result, tag: str):
               help="JSON aggregation pipeline string (raw workload). "
                    "Use {{field:dist}} template variables for per-operation sampling. "
                    "Distributions: uniform (default), zipfian, sequential, literal:<value>.")
+# metadata
+@click.option("--schema", default=None,
+              help="Schema name for metadata (optional). E.g., 'videogame', 'ecommerce'")
+@click.option("--source", default="cli", show_default=True,
+              help="Benchmark source for metadata: cli | demo | mcp")
+@click.option("--workflow-name", default=None,
+              help="Workflow ID (for metadata when run from a workflow/demo)")
+@click.option("--workflow-title", default=None,
+              help="Workflow title (for metadata when run from a workflow/demo)")
 def run(workload, collection, database, threads, duration, tag, distribution,
         fields, batch_size, filter_field, update_fields, read_pct,
         field, range_size, sort_field, sort_direction, limit,
-        match_field, match_value, group_field, accumulator, value_field, pipeline):
+        match_field, match_value, group_field, accumulator, value_field, pipeline,
+        schema, source, workflow_name, workflow_title):
     """Run a benchmark workload."""
     from mdbpl.executor import WorkloadExecutor, parse_duration
     from mdbpl.workloads import REGISTRY
@@ -360,7 +370,17 @@ def run(workload, collection, database, threads, duration, tag, distribution,
     try:
         from mdbpl.storage import BenchmarkStorage
         storage = BenchmarkStorage()
-        run_id = storage.save_result(result, tag)
+        run_id = storage.save_result(
+            result, 
+            tag,
+            collection_size=record_count,
+            schema_name=schema,
+            source=source,
+            collection_name=collection,
+            database_name=database,
+            workflow_name=workflow_name,
+            workflow_title=workflow_title
+        )
         click.echo(f"Results saved — tag: '{tag}'  run_id: {run_id}")
     except Exception as e:
         click.echo(f"Warning: Failed to save results: {e}", err=True)

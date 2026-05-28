@@ -189,7 +189,12 @@ async def run_benchmark(request: RunBenchmarkRequest):
         # Save to storage
         run_id = storage.save_result(
             result=result,
-            tag=request.tag or ""
+            tag=request.tag or "",
+            collection_size=request.record_count,
+            schema_name=None,
+            source='api',
+            collection_name=workload.collection if hasattr(workload, 'collection') else 'usertable',
+            database_name=workload.database if hasattr(workload, 'database') else 'perflab'
         )
         
         # Return result with run_id

@@ -20,7 +20,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from dash import Dash, html, dcc, callback, Input, Output, State, no_update, ALL, MATCH, callback_context
 
-from ..demos import list_demos, get_demo, list_user_demos
+from ..demos import list_demos, get_demo, list_user_demos, DEMOS
 from ..storage import BenchmarkStorage
 import os
 
@@ -2541,6 +2541,42 @@ def setup_callbacks(app: Dash):
                 # Create a unique ID for this checkbox
                 checkbox_id = f"checkbox-run-{run['id']}"
                 
+                # Get workflow title from database
+                workflow_title = run.get('workflow_title')
+                
+                # Build descriptive subtitle with collection/db context
+                subtitle_parts = []
+                
+                # Add collection and database
+                if run.get('database_name') and run.get('collection_name'):
+                    subtitle_parts.append(f"{run['database_name']}.{run['collection_name']}")
+                elif run.get('collection_name'):
+                    subtitle_parts.append(run['collection_name'])
+                
+                # Add collection size
+                if run.get('collection_size') and run['collection_size'] > 0:
+                    size_str = f"{run['collection_size']:,} docs"
+                    subtitle_parts.append(size_str)
+                    
+                # Add schema name
+                if run.get('schema_name'):
+                    subtitle_parts.append(f"schema: {run['schema_name']}")
+                
+                # Add workload type
+                subtitle_parts.append(f"workload: {run['workload_name']}")
+                    
+                subtitle = " • ".join(subtitle_parts) if subtitle_parts else ""
+                
+                # Determine badge text and color
+                badge_text = None
+                badge_color = None
+                if run.get('source') == 'demo':
+                    badge_text = "DEMO"
+                    badge_color = "#7c3aed"
+                elif run.get('source') == 'mcp':
+                    badge_text = "MCP"
+                    badge_color = "#16a34a"
+                
                 card = html.Div([
                     html.Div([
                         dcc.Checklist(
@@ -2551,9 +2587,22 @@ def setup_callbacks(app: Dash):
                         ),
                         html.Div([
                             html.Div([
-                                html.Div(run["workload_name"], className="result-card-title"),
-                                html.Div(run["tag"] if run.get("tag") else "untagged", className="result-card-tag") if run.get("tag") else html.Div(),
+                                html.Span(run["tag"] if run.get("tag") else "untagged", className="result-card-title", style={"marginRight": "8px"}),
+                                html.Span(
+                                    badge_text,
+                                    style={
+                                        "fontSize": "11px",
+                                        "fontWeight": "700",
+                                        "padding": "2px 8px",
+                                        "borderRadius": "4px",
+                                        "backgroundColor": badge_color,
+                                        "color": "white",
+                                        "verticalAlign": "middle"
+                                    }
+                                ) if badge_text else None,
                             ], className="result-card-header"),
+                            html.Div(workflow_title, style={"fontSize": "13px", "color": "#6366f1", "fontWeight": "600", "marginBottom": "4px"}) if workflow_title else html.Div(),
+                            html.Div(subtitle, style={"fontSize": "13px", "color": "#64748b", "marginBottom": "4px"}) if subtitle else html.Div(),
                             html.Div([
                                 html.Span(f"Throughput: {run['operations_per_second']:.2f} ops/sec | "),
                                 html.Span(f"P95: {run['latency_p95']:.2f}ms | "),
@@ -2630,17 +2679,21 @@ def setup_callbacks(app: Dash):
             if not run1 or not run2:
                 return html.Div("❌ Could not find selected runs.", className="error"), is_swapped
             
+            # Sort by timestamp - oldest should be baseline, newest should be comparison
+            # This ensures consistent ordering regardless of selection order
+            runs_sorted = sorted([run1, run2], key=lambda r: r.get('timestamp', ''))
+            
             # Swap order if requested
             if is_swapped:
-                first_run = run2
-                second_run = run1
-                first_label = f"Run 2 ({run2.get('tag', 'untagged')})"
-                second_label = f"Run 1 ({run1.get('tag', 'untagged')})"
+                first_run = runs_sorted[1]
+                second_run = runs_sorted[0]
+                first_label = f"Newer ({runs_sorted[1].get('tag', 'untagged')})"
+                second_label = f"Older ({runs_sorted[0].get('tag', 'untagged')})"
             else:
-                first_run = run1
-                second_run = run2
-                first_label = f"Run 1 ({run1.get('tag', 'untagged')})"
-                second_label = f"Run 2 ({run2.get('tag', 'untagged')})"
+                first_run = runs_sorted[0]
+                second_run = runs_sorted[1]
+                first_label = f"Older ({runs_sorted[0].get('tag', 'untagged')})"
+                second_label = f"Newer ({runs_sorted[1].get('tag', 'untagged')})"
             
             first_run['throughput'] = first_run.get('operations_per_second', 0)
             second_run['throughput'] = second_run.get('operations_per_second', 0)
